@@ -1,0 +1,54 @@
+name: mostromo_connect
+description: "A new Flutter project."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: "^3.9.2"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # --- Workspace Paketleri ---
+  common_ui:
+    path: ../../packages/common_ui
+  shared_core:
+    path: ../../packages/shared_core
+
+  mostromo_icons:
+    path: ../../packages/mostromo_icons
+  # --- Gerekli Paketler ---
+  go_router: ^16.3.0
+  provider: ^6.1.1
+  flutter_downloader: ^1.11.0 # (Sürümü kontrol et)
+  background_downloader: ^9.4.0
+  file_picker: ^10.3.7
+  open_filex: ^4.3.2
+  pdfrx:
+  flutter_highlight: ^0.7.0
+  flutter_localizations:
+    sdk: flutter
+  http: ^1.6.0
+  path_provider: ^2.1.5
+  cached_network_image: ^3.4.1
+
+  window_manager:
+  screen_retriever:
+  desktop_drop: ^0.7.1
+  tray_manager: ^0.5.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/app_icon.ico
+  # Sadece tek dosyayı tanımlıyoruz
+fonts:
+  - family: Inter
+    fonts:
+      - asset: assets/fonts/Inter-VariableFont_opsz,wght.ttf
