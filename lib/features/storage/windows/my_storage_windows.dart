@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mostromo_connect/features/storage/viewmodels/storage_view_model.dart';
+import 'package:mostromo_connect/features/storage/widgets/download_status_panel.dart';
 import 'package:provider/provider.dart';
 import 'package:common_ui/data/theme_colors.dart';
 import 'package:shared_core/models/file_model.dart';
@@ -373,6 +374,8 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
       _showDeleteDialog(context, viewModel, singleItem: item);
     } else if (action == 'rename') {
       _showRenameDialog(context, item, viewModel);
+    } else if (action == 'download' && item is FileItem) {
+      viewModel.startDownload(item);
     }
   }
 
@@ -644,6 +647,12 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                     ),
                   ),
                 ),
+
+              Positioned(
+                bottom: 24,
+                left: 24,
+                child: DownloadStatusPanel(viewModel: viewModel),
+              ),
             ],
           ),
         ),

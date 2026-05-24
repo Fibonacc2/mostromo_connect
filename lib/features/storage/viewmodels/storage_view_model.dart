@@ -6,6 +6,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:http/http.dart' as http;
+import 'package:dio/dio.dart'; // 🌟 İndirme Motoru İçin
+import 'package:path_provider/path_provider.dart'; // 🌟 İndirme Klasörü İçin
 import 'package:mostromo_connect/features/storage/viewmodels/workspace_model.dart';
 
 import 'package:shared_core/models/folder_model.dart';
@@ -26,6 +28,31 @@ class UploadItem {
     required this.targetFolderName,
     this.isFolder = false,
     this.relativePathForTree = '',
+  });
+}
+
+enum DownloadStatus { downloading, paused, completed, error }
+
+class DownloadItem {
+  final String id;
+  final String fileName;
+  final String url;
+  final String savePath;
+  CancelToken? cancelToken;
+  double progress;
+  int downloadedBytes;
+  int totalBytes;
+  DownloadStatus status;
+
+  DownloadItem({
+    required this.id,
+    required this.fileName,
+    required this.url,
+    required this.savePath,
+    this.progress = 0.0,
+    this.downloadedBytes = 0,
+    this.totalBytes = 0,
+    this.status = DownloadStatus.downloading,
   });
 }
 
@@ -552,10 +579,6 @@ class StorageViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  // =====================================================================
-  // 🌟 YENİ EKLENEN SEÇİM VE MARQUEE (SÜRÜKLEME) FONKSİYONLARI
-  // =====================================================================
-
   void toggleFileSelection(FileItem file) {
     if (_selectedFiles.contains(file))
       _selectedFiles.remove(file);
@@ -584,7 +607,6 @@ class StorageViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Sürükle-seç esnasında çalışan canlı seçici
   void updateMarqueeSelection(
     List<dynamic> intersectingItems, {
     required Set<dynamic> preDragSelection,
@@ -592,13 +614,11 @@ class StorageViewModel extends ChangeNotifier {
     _selectedFolders.clear();
     _selectedFiles.clear();
 
-    // Eğer CTRL basılıyken başlandıysa, eski seçilenleri tut
     for (var item in preDragSelection) {
       if (item is FolderItem) _selectedFolders.add(item);
       if (item is FileItem) _selectedFiles.add(item);
     }
 
-    // Seçim kutusuna girenleri seç
     for (var item in intersectingItems) {
       if (item is FolderItem) _selectedFolders.add(item);
       if (item is FileItem) _selectedFiles.add(item);
@@ -737,5 +757,169 @@ class StorageViewModel extends ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+  }
+
+  // =====================================================================
+  // 📥 KESİNTİSİZ İNDİRME MOTORU (PAUSE/RESUME DESTEKLİ)
+  // =====================================================================
+  final List<DownloadItem> _activeDownloads = [];
+  List<DownloadItem> get activeDownloads => _activeDownloads;
+
+  Future<void> startDownload(FileItem file) async {
+    String url = file.fileUrl;
+    if (!url.startsWith('http')) {
+      url = "https://mostromo.com/connect/$url";
+    }
+
+    Directory? dir = await getDownloadsDirectory();
+    dir ??= await getApplicationDocumentsDirectory();
+
+    final mostromoDir = Directory('${dir.path}/Mostromo');
+    if (!await mostromoDir.exists()) {
+      await mostromoDir.create(recursive: true);
+    }
+
+    final savePath = '${mostromoDir.path}/${file.fileName}';
+
+    // ✅ DÜZELTME 1: fileId yerine string olan fileUrl'yi kimlik olarak kullandık
+    if (_activeDownloads.any((item) => item.id == file.fileUrl)) return;
+
+    final newItem = DownloadItem(
+      id: file.fileUrl,
+      fileName: file.fileName,
+      url: url,
+      savePath: savePath,
+    );
+
+    _activeDownloads.add(newItem);
+    notifyListeners();
+
+    _processDownload(newItem);
+  }
+
+  Future<void> _processDownload(DownloadItem item) async {
+    item.cancelToken = CancelToken();
+    item.status = DownloadStatus.downloading;
+    notifyListeners();
+
+    try {
+      final file = File(item.savePath);
+      int startByte = 0;
+
+      if (await file.exists()) {
+        startByte = await file.length();
+      }
+
+      final dio = Dio();
+
+      final options = Options(
+        responseType: ResponseType.stream,
+        headers: startByte > 0 ? {'Range': 'bytes=$startByte-'} : {},
+      );
+
+      // ✅ DÜZELTME 2: Gelen yanıtın byte stream olduğunu Dio'ya açıkça söylüyoruz. (int/num hatası çözüldü)
+      final response = await dio.get<ResponseBody>(
+        item.url,
+        cancelToken: item.cancelToken,
+        options: options,
+      );
+
+      if (item.totalBytes == 0) {
+        final contentRange = response.headers.value(
+          HttpHeaders.contentRangeHeader,
+        );
+        if (contentRange != null) {
+          item.totalBytes = int.parse(contentRange.split('/').last);
+        } else {
+          final contentLength = response.headers.value(
+            HttpHeaders.contentLengthHeader,
+          );
+          if (contentLength != null) {
+            item.totalBytes = int.parse(contentLength) + startByte;
+          }
+        }
+      }
+
+      if (response.statusCode == 200 && startByte > 0) {
+        startByte = 0;
+        file.writeAsBytesSync([]);
+      }
+
+      if (startByte == item.totalBytes && item.totalBytes > 0) {
+        item.progress = 1.0;
+        item.status = DownloadStatus.completed;
+        notifyListeners();
+        return;
+      }
+
+      final raf = file.openSync(mode: FileMode.append);
+
+      // response.data artık kesinlikle ResponseBody'dir (Düzeltme 2 devamı)
+      final stream = response.data!.stream;
+      int downloaded = startByte;
+
+      await for (var chunk in stream) {
+        if (item.cancelToken!.isCancelled) break;
+        raf.writeFromSync(chunk);
+
+        // chunk artık kesinlikle Uint8List'tir, toplama işleminde num sorunu yaşatmaz
+        downloaded += chunk.length;
+
+        item.downloadedBytes = downloaded;
+        if (item.totalBytes > 0) {
+          item.progress = downloaded / item.totalBytes;
+        }
+        notifyListeners();
+      }
+      raf.closeSync();
+
+      if (!item.cancelToken!.isCancelled) {
+        item.status = DownloadStatus.completed;
+        notifyListeners();
+      }
+    } catch (e) {
+      // ✅ DÜZELTME 3: e parametresinin DioException olup olmadığını kontrol ediyoruz
+      if (e is DioException && CancelToken.isCancel(e)) {
+        item.status = DownloadStatus.paused;
+      } else {
+        item.status = DownloadStatus.error;
+      }
+      notifyListeners();
+    }
+  }
+
+  void pauseDownload(String id) {
+    final index = _activeDownloads.indexWhere((e) => e.id == id);
+    if (index != -1) {
+      _activeDownloads[index].cancelToken?.cancel("Duraklatıldı");
+    }
+  }
+
+  void resumeDownload(String id) {
+    final index = _activeDownloads.indexWhere((e) => e.id == id);
+    if (index != -1) {
+      _processDownload(_activeDownloads[index]);
+    }
+  }
+
+  void cancelDownload(String id) {
+    final index = _activeDownloads.indexWhere((e) => e.id == id);
+    if (index != -1) {
+      final item = _activeDownloads[index];
+      item.cancelToken?.cancel("İptal Edildi");
+      final file = File(item.savePath);
+      if (file.existsSync()) {
+        file.deleteSync();
+      }
+      _activeDownloads.removeAt(index);
+      notifyListeners();
+    }
+  }
+
+  void clearCompletedDownloads() {
+    _activeDownloads.removeWhere(
+      (item) => item.status == DownloadStatus.completed,
+    );
+    if (_activeDownloads.isEmpty) notifyListeners();
   }
 }
