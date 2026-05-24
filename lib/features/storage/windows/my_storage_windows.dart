@@ -779,7 +779,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
   }
 
   // ============================================================================
-  // 🌟 MODERN IZGARA KARTI (CTRL VE SADECE TIKLAMA DESTEĞİ)
+  // 🌟 MODERN IZGARA KARTI (ODAKLANMA VE SEÇİM AYRILDI)
   // ============================================================================
   Widget _buildGridItem({
     required dynamic item,
@@ -789,16 +789,18 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
     required bool isFolder,
     required StorageViewModel viewModel,
   }) {
+    // Info panelinde gösterilen odaklanılmış (Aktif) öğe mi?
     final bool isActive = viewModel.activeItem == item;
+
+    // Toplu işlem için (Mavi tikli) seçilmiş öğe mi?
     final bool isSelected = isFolder
         ? viewModel.selectedFolders.contains(item)
         : viewModel.selectedFiles.contains(item);
 
-    // Konumunu Marquee için kaydetmek adına ona bir anahtar (key) veriyoruz
     final itemKey = _itemKeys.putIfAbsent(item, () => GlobalKey());
 
     return GestureDetector(
-      key: itemKey, // Marquee Seçici bu key'den dosyanın nerede olduğunu bulur
+      key: itemKey,
       behavior: HitTestBehavior.opaque,
       onSecondaryTapUp: (details) =>
           _showContextMenu(context, details.globalPosition, item),
@@ -807,6 +809,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
           AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             decoration: BoxDecoration(
+              // Seçiliyse belirgin mavi, sadece aktifse (info paneli) ikon rengi
               color: isSelected
                   ? ThemeColors.primary.withOpacity(0.08)
                   : (isActive
@@ -844,22 +847,20 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                 borderRadius: BorderRadius.circular(20),
                 hoverColor: iconColor.withOpacity(0.05),
 
-                // 🌟 MASAÜSTÜ SEÇME MANTIĞI: Uzun basma silindi!
+                // 🌟 MASAÜSTÜ TIKLAMA MANTIĞI
                 onTap: () {
                   if (_isCtrlPressed) {
-                    // CTRL'ye basılıyorsa o anki seçime ekle
+                    // CTRL BASILIYSA: Toplu seçime (Mavi Tik) ekle veya çıkar
                     if (isFolder)
                       viewModel.toggleFolderSelection(item);
                     else
                       viewModel.toggleFileSelection(item);
                   } else {
-                    // Normal tıklandıysa diğer seçimleri sıfırla, bunu seç ve infoyu aç
-                    viewModel.clearSelection();
-                    if (isFolder)
-                      viewModel.toggleFolderSelection(item);
-                    else
-                      viewModel.toggleFileSelection(item);
-                    viewModel.selectItem(item);
+                    // NORMAL TIKLAMA: Varsa toplu seçimi iptal et, SADECE INFO PANELİNDE AÇ!
+                    if (viewModel.isSelectionMode) {
+                      viewModel.clearSelection();
+                    }
+                    viewModel.selectItem(item); // Öğeyi aktif yap
                   }
                 },
 
@@ -903,6 +904,8 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
               ),
             ),
           ),
+
+          // 🌟 MAVİ TİK SADECE "SEÇİLMİŞ" İSE ÇIKAR (Aktif/Odaklıysa çıkmaz)
           if (isSelected)
             Positioned(
               top: 10,
