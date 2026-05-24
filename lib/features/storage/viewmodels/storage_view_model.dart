@@ -6,8 +6,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:http/http.dart' as http;
-import 'package:dio/dio.dart'; // 🌟 İndirme Motoru İçin
-import 'package:path_provider/path_provider.dart'; // 🌟 İndirme Klasörü İçin
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:mostromo_connect/features/storage/viewmodels/workspace_model.dart';
 
 import 'package:shared_core/models/folder_model.dart';
@@ -760,7 +760,7 @@ class StorageViewModel extends ChangeNotifier {
   }
 
   // =====================================================================
-  // 📥 KESİNTİSİZ İNDİRME MOTORU (PAUSE/RESUME DESTEKLİ)
+  // 📥 KESİNTİSİZ İNDİRME MOTORU (PAUSE/RESUME VE THROTTLING DESTEKLİ)
   // =====================================================================
   final List<DownloadItem> _activeDownloads = [];
   List<DownloadItem> get activeDownloads => _activeDownloads;
@@ -781,7 +781,6 @@ class StorageViewModel extends ChangeNotifier {
 
     final savePath = '${mostromoDir.path}/${file.fileName}';
 
-    // ✅ DÜZELTME 1: fileId yerine string olan fileUrl'yi kimlik olarak kullandık
     if (_activeDownloads.any((item) => item.id == file.fileUrl)) return;
 
     final newItem = DownloadItem(
@@ -817,7 +816,6 @@ class StorageViewModel extends ChangeNotifier {
         headers: startByte > 0 ? {'Range': 'bytes=$startByte-'} : {},
       );
 
-      // ✅ DÜZELTME 2: Gelen yanıtın byte stream olduğunu Dio'ya açıkça söylüyoruz. (int/num hatası çözüldü)
       final response = await dio.get<ResponseBody>(
         item.url,
         cancelToken: item.cancelToken,
@@ -853,23 +851,39 @@ class StorageViewModel extends ChangeNotifier {
       }
 
       final raf = file.openSync(mode: FileMode.append);
-
-      // response.data artık kesinlikle ResponseBody'dir (Düzeltme 2 devamı)
       final stream = response.data!.stream;
+
       int downloaded = startByte;
+
+      // 🌟 YENİ: Arayüz Tıkanmasını Önleme (Throttling) Freni
+      int lastProgressPercent = 0;
+      if (item.totalBytes > 0) {
+        lastProgressPercent = ((startByte / item.totalBytes) * 100).toInt();
+      }
 
       await for (var chunk in stream) {
         if (item.cancelToken!.isCancelled) break;
         raf.writeFromSync(chunk);
 
-        // chunk artık kesinlikle Uint8List'tir, toplama işleminde num sorunu yaşatmaz
         downloaded += chunk.length;
-
         item.downloadedBytes = downloaded;
+
         if (item.totalBytes > 0) {
           item.progress = downloaded / item.totalBytes;
+
+          // Sadece ilerleme yüzdesi tam sayı olarak değiştiğinde arayüzü güncelle
+          int currentProgressPercent = (item.progress * 100).toInt();
+          if (currentProgressPercent > lastProgressPercent ||
+              downloaded == item.totalBytes) {
+            lastProgressPercent = currentProgressPercent;
+            notifyListeners();
+          }
+        } else {
+          // Eğer dosya boyutu bilinmiyorsa her 500 KB'da bir güncelle
+          if (downloaded % (500 * 1024) < chunk.length) {
+            notifyListeners();
+          }
         }
-        notifyListeners();
       }
       raf.closeSync();
 
@@ -878,7 +892,6 @@ class StorageViewModel extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e) {
-      // ✅ DÜZELTME 3: e parametresinin DioException olup olmadığını kontrol ediyoruz
       if (e is DioException && CancelToken.isCancel(e)) {
         item.status = DownloadStatus.paused;
       } else {

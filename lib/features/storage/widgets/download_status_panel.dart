@@ -14,7 +14,6 @@ class DownloadStatusPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final downloads = viewModel.activeDownloads;
 
-    // İndirme yoksa paneli tamamen gizle
     if (downloads.isEmpty) return const SizedBox.shrink();
 
     return ClipRRect(
@@ -32,7 +31,6 @@ class DownloadStatusPanel extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // PANEL BAŞLIĞI
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 20,
@@ -62,7 +60,6 @@ class DownloadStatusPanel extends StatelessWidget {
                       ),
                     ),
                     const Spacer(),
-                    // Tüm tamamlananları temizle butonu
                     if (downloads.any(
                       (d) => d.status == DownloadStatus.completed,
                     ))
@@ -81,7 +78,6 @@ class DownloadStatusPanel extends StatelessWidget {
                 ),
               ),
 
-              // İNDİRME LİSTESİ
               Flexible(
                 child: ListView.builder(
                   shrinkWrap: true,
@@ -104,7 +100,8 @@ class DownloadStatusPanel extends StatelessWidget {
     Color statusColor;
     String statusText;
     IconData actionIcon;
-    Function() actionTap;
+    VoidCallback?
+    actionTap; // 🌟 DÜZELTME: Type güvenliği eklendi ve null yapılabilir hale getirildi.
 
     switch (item.status) {
       case DownloadStatus.downloading:
@@ -125,7 +122,8 @@ class DownloadStatusPanel extends StatelessWidget {
         statusColor = Colors.green;
         statusText = "Tamamlandı";
         actionIcon = Icons.check_circle_rounded;
-        actionTap = () {};
+        actionTap =
+            null; // 🌟 DÜZELTME: Tamamlandığında buton tamamen pasif (tıklanamaz) olur
         break;
       case DownloadStatus.error:
         statusColor = Colors.redAccent;
@@ -195,7 +193,8 @@ class DownloadStatusPanel extends StatelessWidget {
               if (item.status != DownloadStatus.completed)
                 IconButton(
                   icon: Icon(actionIcon, color: statusColor, size: 22),
-                  onPressed: actionTap,
+                  onPressed:
+                      actionTap, // Eğer actionTap null ise buton görsel olarak da tıklanamaz olur
                   splashRadius: 20,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
