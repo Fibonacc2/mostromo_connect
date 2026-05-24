@@ -760,7 +760,7 @@ class StorageViewModel extends ChangeNotifier {
   }
 
   // =====================================================================
-  // 📥 KESİNTİSİZ İNDİRME MOTORU (PAUSE/RESUME VE THROTTLING DESTEKLİ)
+  // 📥 KESİNTİSİZ İNDİRME MOTORU (TÜM BLOKLAYAN KODLAR ASENKRON YAPILDI)
   // =====================================================================
   final List<DownloadItem> _activeDownloads = [];
   List<DownloadItem> get activeDownloads => _activeDownloads;
@@ -840,7 +840,7 @@ class StorageViewModel extends ChangeNotifier {
 
       if (response.statusCode == 200 && startByte > 0) {
         startByte = 0;
-        file.writeAsBytesSync([]);
+        await file.writeAsBytes([]); // 🌟 YENİ: Asenkron dosya temizliği
       }
 
       if (startByte == item.totalBytes && item.totalBytes > 0) {
@@ -850,20 +850,22 @@ class StorageViewModel extends ChangeNotifier {
         return;
       }
 
-      final raf = file.openSync(mode: FileMode.append);
+      // 🌟 YENİ 1: Dosyayı ASENKRON (Main Isolate'i bloklamayacak şekilde) aç!
+      final raf = await file.open(mode: FileMode.append);
       final stream = response.data!.stream;
 
       int downloaded = startByte;
 
-      // 🌟 YENİ: Arayüz Tıkanmasını Önleme (Throttling) Freni
-      int lastProgressPercent = 0;
-      if (item.totalBytes > 0) {
-        lastProgressPercent = ((startByte / item.totalBytes) * 100).toInt();
-      }
+      // 🌟 YENİ 2: Sadece %1 bazlı değil, KRONOMETRE bazlı (100ms) UI Throttle.
+      // Bu sayede yüzbinlerce chunk gelse bile ekran saniyede max 10 kez çizilir, asla kasmaz!
+      final stopwatch = Stopwatch()..start();
 
       await for (var chunk in stream) {
         if (item.cancelToken!.isCancelled) break;
-        raf.writeFromSync(chunk);
+
+        // 🌟 YENİ 3: Diske yazma işlemini ASENKRON yap!
+        // Böylece yazma işlemi devam ederken sen uygulamada rahatça gezebilirsin.
+        await raf.writeFrom(chunk);
 
         downloaded += chunk.length;
         item.downloadedBytes = downloaded;
@@ -871,21 +873,23 @@ class StorageViewModel extends ChangeNotifier {
         if (item.totalBytes > 0) {
           item.progress = downloaded / item.totalBytes;
 
-          // Sadece ilerleme yüzdesi tam sayı olarak değiştiğinde arayüzü güncelle
-          int currentProgressPercent = (item.progress * 100).toInt();
-          if (currentProgressPercent > lastProgressPercent ||
+          // Sadece 100 milisaniye geçtiyse veya indirme tamamen bittiyse ekranı güncelle
+          if (stopwatch.elapsedMilliseconds > 100 ||
               downloaded == item.totalBytes) {
-            lastProgressPercent = currentProgressPercent;
             notifyListeners();
+            stopwatch.reset(); // Kronometreyi sıfırla ve yeniden saymaya başla
           }
         } else {
-          // Eğer dosya boyutu bilinmiyorsa her 500 KB'da bir güncelle
-          if (downloaded % (500 * 1024) < chunk.length) {
+          // Boyut bilinmiyorsa yine 100ms'de bir güncelle
+          if (stopwatch.elapsedMilliseconds > 100) {
             notifyListeners();
+            stopwatch.reset();
           }
         }
       }
-      raf.closeSync();
+
+      // 🌟 YENİ 4: Asenkron Kapatma
+      await raf.close();
 
       if (!item.cancelToken!.isCancelled) {
         item.status = DownloadStatus.completed;
