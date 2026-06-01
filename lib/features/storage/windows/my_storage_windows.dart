@@ -6,16 +6,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mostromo_connect/features/storage/viewmodels/storage_view_model.dart';
-import 'package:mostromo_connect/features/storage/widgets/download_status_panel.dart';
 import 'package:provider/provider.dart';
 import 'package:common_ui/data/theme_colors.dart';
 import 'package:shared_core/models/file_model.dart';
 import 'package:shared_core/models/folder_model.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
-// BİLGİ VE YÜKLEME PANELLERİ
 import '../widgets/storage_info_panel.dart';
 import '../widgets/upload_status_panel.dart';
+import '../widgets/download_status_panel.dart';
 
 class MyStorageWindowsPage extends StatefulWidget {
   const MyStorageWindowsPage({super.key});
@@ -28,11 +27,9 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
   bool _isDragging = false;
   int _lastFolderId = -1;
 
-  // 🌟 MASAÜSTÜ SEÇİM DONANIMLARI
   final FocusNode _focusNode = FocusNode();
   bool _isCtrlPressed = false;
 
-  // Sürükle Seç (Marquee) Kordinatları
   final GlobalKey _stackKey = GlobalKey();
   final Map<dynamic, GlobalKey> _itemKeys = {};
   Offset? _dragStart;
@@ -42,9 +39,12 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
   @override
   void initState() {
     super.initState();
-    _focusNode.requestFocus(); // Klavyeyi hemen dinlemeye başla
+    _focusNode.requestFocus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<StorageViewModel>().fetchData();
+      if (context.read<StorageViewModel>().allFolders.isEmpty &&
+          context.read<StorageViewModel>().allFiles.isEmpty) {
+        context.read<StorageViewModel>().fetchData();
+      }
     });
   }
 
@@ -54,15 +54,11 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
     super.dispose();
   }
 
-  // ============================================================================
-  // 📐 MARQUEE (SÜRÜKLEEREK SEÇİM) HESAPLAYICILARI
-  // ============================================================================
   void _handlePanStart(DragStartDetails details) {
     setState(() {
       _dragStart = details.localPosition;
       _dragCurrent = details.localPosition;
     });
-
     final viewModel = context.read<StorageViewModel>();
     if (_isCtrlPressed) {
       _preDragSelection = {
@@ -93,47 +89,35 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
 
   void _updateSelectionFromMarquee() {
     if (_dragStart == null || _dragCurrent == null) return;
-
-    // Çizilen kutunun koordinatları
     final rect = Rect.fromPoints(_dragStart!, _dragCurrent!);
     final viewModel = context.read<StorageViewModel>();
-
     List<dynamic> intersectingItems = [];
     final stackBox = _stackKey.currentContext?.findRenderObject() as RenderBox?;
     if (stackBox == null) return;
 
-    // Tüm dosyalara/klasörlere bak ve hangileri kutunun içine girmiş bul
     _itemKeys.forEach((item, key) {
       final ctx = key.currentContext;
       if (ctx != null) {
         final box = ctx.findRenderObject() as RenderBox?;
         if (box != null) {
           try {
-            final itemPosition = box.localToGlobal(
-              Offset.zero,
-              ancestor: stackBox,
-            );
-            final itemRect = itemPosition & box.size;
-
+            final itemRect =
+                box.localToGlobal(Offset.zero, ancestor: stackBox) & box.size;
             if (rect.overlaps(itemRect)) {
               intersectingItems.add(item);
             }
-          } catch (
-            e
-          ) {} // Render edilmemiş (scroll dışında kalmış) öğeleri es geç
+          } catch (e) {
+            // Render edilmeyen widget'lar için sessizce geç
+          }
         }
       }
     });
-
     viewModel.updateMarqueeSelection(
       intersectingItems,
       preDragSelection: _preDragSelection,
     );
   }
 
-  // ============================================================================
-  // 📁 MODERN KLASÖR OLUŞTURMA DİYALOĞU
-  // ============================================================================
   void _showCreateFolderDialog(BuildContext context) {
     final viewModel = context.read<StorageViewModel>();
     final controller = TextEditingController();
@@ -240,9 +224,6 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
     );
   }
 
-  // ============================================================================
-  // 🖱️ KONTEKST MENÜLER (SAĞ TIK)
-  // ============================================================================
   void _showContextMenu(
     BuildContext context,
     Offset globalPosition,
@@ -271,14 +252,16 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
         _buildDesktopMenuItem('rename', Icons.edit_rounded, 'Yeniden Adlandır'),
         const PopupMenuDivider(height: 1),
         _buildDesktopMenuItem(
-          'delete',
+          'trash',
           Icons.delete_rounded,
-          'Sil',
+          'Çöpe At',
           isDestructive: true,
         ),
       ],
     ).then((value) {
-      if (value != null) _handleMenuAction(value, item, context);
+      if (value != null) {
+        _handleMenuAction(value, item, context);
+      }
     });
   }
 
@@ -320,14 +303,15 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
       ],
     ).then((value) {
       final viewModel = context.read<StorageViewModel>();
-      if (value == 'refresh')
+      if (value == 'refresh') {
         viewModel.fetchData();
-      else if (value == 'new_folder')
+      } else if (value == 'new_folder') {
         _showCreateFolderDialog(context);
-      else if (value == 'upload')
+      } else if (value == 'upload') {
         context.go('/upload');
-      else if (value == 'select_all')
-        viewModel.selectAll();
+      } else if (value == 'select_all') {
+        viewModel.selectAll(isTrash: false);
+      }
     });
   }
 
@@ -365,38 +349,46 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
 
   void _handleMenuAction(String action, dynamic item, BuildContext context) {
     final viewModel = context.read<StorageViewModel>();
+
+    if (viewModel.selectedFiles.isEmpty && viewModel.selectedFolders.isEmpty) {
+      if (item is FolderItem) {
+        viewModel.toggleFolderSelection(item);
+      } else {
+        viewModel.toggleFileSelection(item as FileItem);
+      }
+    }
+
     if (action == 'open') {
-      if (item is FolderItem)
+      viewModel.clearSelection();
+      if (item is FolderItem) {
         viewModel.navigateToFolder(item);
-      else
+      } else {
         _openFileViewer(context, item as FileItem);
-    } else if (action == 'delete') {
-      _showDeleteDialog(context, viewModel, singleItem: item);
+      }
+    } else if (action == 'trash') {
+      _showTrashDialog(context, viewModel, singleItem: item);
     } else if (action == 'rename') {
       _showRenameDialog(context, item, viewModel);
-    } else if (action == 'download' && item is FileItem) {
-      viewModel.startDownload(item);
+    } else if (action == 'download') {
+      viewModel.startDownload(item as FileItem);
     }
   }
 
   void _openFileViewer(BuildContext context, FileItem file) {
     final ext = file.fileExtension.toLowerCase();
-    if (ext == 'pdf')
+    if (ext == 'pdf') {
       context.push('/pdf_viewer', extra: file);
-    else if (['txt', 'md', 'json'].contains(ext))
+    } else if (['txt', 'md', 'json'].contains(ext)) {
       context.push('/text_viewer', extra: file);
-    else
+    } else {
       context.push('/media_viewer', extra: file);
+    }
   }
 
-  // ============================================================================
-  // 🎨 ANA TASARIM VE KLAVYE MİMARİSİ
-  // ============================================================================
   @override
   Widget build(BuildContext context) {
     final viewModel = context.watch<StorageViewModel>();
 
-    // Başka klasöre geçerken bellek sızıntısını önlemek için seçim anahtarlarını sıfırla
     if (_lastFolderId != viewModel.currentFolderId) {
       _itemKeys.clear();
       _lastFolderId = viewModel.currentFolderId;
@@ -406,15 +398,13 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
       focusNode: _focusNode,
       autofocus: true,
       onKeyEvent: (node, event) {
-        setState(() {
-          _isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
-        });
-
-        // 🌟 CTRL+A TUŞ KOMBİNASYONU
+        setState(
+          () => _isCtrlPressed = HardwareKeyboard.instance.isControlPressed,
+        );
         if (event is KeyDownEvent &&
             event.logicalKey == LogicalKeyboardKey.keyA &&
             _isCtrlPressed) {
-          viewModel.selectAll();
+          viewModel.selectAll(isTrash: false);
           return KeyEventResult.handled;
         }
         return KeyEventResult.ignored;
@@ -432,10 +422,8 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
         child: Scaffold(
           backgroundColor: ThemeColors.background,
           body: Stack(
-            key:
-                _stackKey, // Stack'in yerini bilmemiz lazım ki seçme kutusunu doğru çizelim
+            key: _stackKey,
             children: [
-              // 1. KATMAN: ANA ALAN (SÜRÜKLE & SEÇ GEOMETRİSİ BURADA)
               Positioned.fill(
                 child: GestureDetector(
                   onTap: () {
@@ -444,7 +432,6 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                   },
                   onSecondaryTapUp: (details) =>
                       _showEmptySpaceMenu(context, details.globalPosition),
-                  // Sürükleyerek seçim
                   onPanStart: _handlePanStart,
                   onPanUpdate: _handlePanUpdate,
                   onPanEnd: _handlePanEnd,
@@ -459,7 +446,6 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                 ),
               ),
 
-              // 2. KATMAN: MAVİ YARI SAYDAM SEÇİM ÇERÇEVESİ (MARQUEE)
               if (_dragStart != null && _dragCurrent != null)
                 Positioned(
                   left: min(_dragStart!.dx, _dragCurrent!.dx),
@@ -478,7 +464,6 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                   ),
                 ),
 
-              // 3. KATMAN: MODERN ÜST BAR (HEADER)
               Positioned(
                 top: 0,
                 left: 0,
@@ -486,14 +471,13 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                 child: _buildGlassHeader(viewModel),
               ),
 
-              // 4. KATMAN: BİLGİ PANELİ
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 350),
                 curve: Curves.easeOutCubic,
                 top: 100,
                 bottom: 24,
-                right: viewModel.isInfoPanelOpen ? 24 : -350,
-                width: 320,
+                right: viewModel.isInfoPanelOpen ? 24 : -300,
+                width: 250,
                 child: Material(
                   elevation: 24,
                   shadowColor: Colors.black.withOpacity(0.15),
@@ -514,7 +498,6 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                 ),
               ),
 
-              // 5. KATMAN: ÇOKLU SEÇİM EYLEM ÇUBUĞU
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 300),
                 curve: Curves.easeOutCubic,
@@ -562,18 +545,28 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                           ),
                           const SizedBox(width: 16),
                           TextButton.icon(
-                            onPressed: () => viewModel.selectAll(),
+                            onPressed: () =>
+                                viewModel.selectAll(isTrash: false),
                             icon: const Icon(Icons.select_all_rounded),
                             label: const Text("Tümünü Seç"),
                           ),
                           const SizedBox(width: 8),
                           IconButton(
                             icon: const Icon(
+                              Icons.drive_file_move_rounded,
+                              color: Colors.blue,
+                            ),
+                            onPressed: () {},
+                            tooltip: "Taşı",
+                          ),
+                          IconButton(
+                            icon: const Icon(
                               Icons.delete_rounded,
                               color: Colors.redAccent,
                             ),
                             onPressed: () =>
-                                _showDeleteDialog(context, viewModel),
+                                _showTrashDialog(context, viewModel),
+                            tooltip: "Çöpe At",
                           ),
                         ],
                       ),
@@ -582,15 +575,18 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                 ),
               ),
 
-              // 6. KATMAN: YÜKLEME DURUMU
               Positioned(
                 bottom: 24,
                 left: 0,
                 right: 0,
                 child: Center(child: UploadStatusPanel(viewModel: viewModel)),
               ),
+              Positioned(
+                bottom: 24,
+                left: 24,
+                child: DownloadStatusPanel(viewModel: viewModel),
+              ),
 
-              // 7. KATMAN: SÜRÜKLE BIRAK EFEKTİ
               if (_isDragging)
                 Positioned.fill(
                   child: BackdropFilter(
@@ -647,11 +643,147 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                     ),
                   ),
                 ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-              Positioned(
-                bottom: 24,
-                left: 24,
-                child: DownloadStatusPanel(viewModel: viewModel),
+  Widget _buildGlassHeader(StorageViewModel viewModel) {
+    return ClipRRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: 15 * ThemeColors.glassBlurOpacity,
+          sigmaY: 15 * ThemeColors.glassBlurOpacity,
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          decoration: BoxDecoration(
+            color: ThemeColors.sidePanelColor.withOpacity(0.8),
+            border: Border(
+              bottom: BorderSide(
+                color: ThemeColors.titleText.withOpacity(0.05),
+              ),
+            ),
+          ),
+          child: Row(
+            children: [
+              if (!viewModel.isAtRoot)
+                Container(
+                  margin: const EdgeInsets.only(right: 12),
+                  decoration: BoxDecoration(
+                    color: ThemeColors.surface,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 5,
+                      ),
+                    ],
+                  ),
+                  child: IconButton(
+                    icon: Icon(
+                      Icons.arrow_back_rounded,
+                      color: ThemeColors.titleText,
+                    ),
+                    onPressed: () => viewModel.goBack(),
+                  ),
+                ),
+
+              Text(
+                viewModel.currentFolderName,
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: ThemeColors.titleText,
+                ),
+              ),
+              const SizedBox(width: 32),
+
+              Expanded(
+                child: Container(
+                  height: 44,
+                  constraints: const BoxConstraints(maxWidth: 500),
+                  child: TextField(
+                    onChanged: (value) => viewModel.setSearchQuery(value),
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: ThemeColors.titleText,
+                    ),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: ThemeColors.titleText.withOpacity(0.04),
+                      hintText: "${viewModel.currentFolderName} içinde ara...",
+                      hintStyle: TextStyle(
+                        color: ThemeColors.captionText.withOpacity(0.7),
+                        fontSize: 14,
+                      ),
+                      prefixIcon: Icon(
+                        Icons.search_rounded,
+                        size: 20,
+                        color: ThemeColors.captionText,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide(
+                          color: ThemeColors.titleText.withOpacity(0.05),
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide(
+                          color: ThemeColors.primary.withOpacity(0.5),
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const Spacer(),
+
+              Container(
+                decoration: BoxDecoration(
+                  color: ThemeColors.surface,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: ThemeColors.titleText.withOpacity(0.05),
+                  ),
+                ),
+                child: IconButton(
+                  onPressed: () => _showCreateFolderDialog(context),
+                  icon: Icon(
+                    Icons.create_new_folder_rounded,
+                    color: ThemeColors.titleText,
+                  ),
+                  tooltip: "Yeni Klasör",
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                onPressed: () => context.go('/upload'),
+                icon: const Icon(Icons.cloud_upload_rounded),
+                label: const Text(
+                  "Dosya Yükle",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: ThemeColors.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 4,
+                  shadowColor: ThemeColors.primary.withOpacity(0.4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 18,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
               ),
             ],
           ),
@@ -661,8 +793,8 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
   }
 
   Widget _buildGroupedDesktopGrid(StorageViewModel viewModel) {
-    final folders = viewModel.visibleFolders;
-    final files = viewModel.visibleFiles;
+    final folders = viewModel.activeFolders;
+    final files = viewModel.activeFiles;
 
     const gridDelegate = SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: 220,
@@ -787,9 +919,6 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
     );
   }
 
-  // ============================================================================
-  // 🌟 MODERN IZGARA KARTI (ODAKLANMA VE SEÇİM AYRILDI)
-  // ============================================================================
   Widget _buildGridItem({
     required dynamic item,
     required String name,
@@ -798,14 +927,10 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
     required bool isFolder,
     required StorageViewModel viewModel,
   }) {
-    // Info panelinde gösterilen odaklanılmış (Aktif) öğe mi?
     final bool isActive = viewModel.activeItem == item;
-
-    // Toplu işlem için (Mavi tikli) seçilmiş öğe mi?
     final bool isSelected = isFolder
         ? viewModel.selectedFolders.contains(item)
         : viewModel.selectedFiles.contains(item);
-
     final itemKey = _itemKeys.putIfAbsent(item, () => GlobalKey());
 
     return GestureDetector(
@@ -818,7 +943,6 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
           AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             decoration: BoxDecoration(
-              // Seçiliyse belirgin mavi, sadece aktifse (info paneli) ikon rengi
               color: isSelected
                   ? ThemeColors.primary.withOpacity(0.08)
                   : (isActive
@@ -855,29 +979,26 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
               child: InkWell(
                 borderRadius: BorderRadius.circular(20),
                 hoverColor: iconColor.withOpacity(0.05),
-
-                // 🌟 MASAÜSTÜ TIKLAMA MANTIĞI
                 onTap: () {
                   if (_isCtrlPressed) {
-                    // CTRL BASILIYSA: Toplu seçime (Mavi Tik) ekle veya çıkar
-                    if (isFolder)
+                    if (isFolder) {
                       viewModel.toggleFolderSelection(item);
-                    else
+                    } else {
                       viewModel.toggleFileSelection(item);
+                    }
                   } else {
-                    // NORMAL TIKLAMA: Varsa toplu seçimi iptal et, SADECE INFO PANELİNDE AÇ!
                     if (viewModel.isSelectionMode) {
                       viewModel.clearSelection();
                     }
-                    viewModel.selectItem(item); // Öğeyi aktif yap
+                    viewModel.selectItem(item);
                   }
                 },
-
                 onDoubleTap: () {
-                  if (isFolder)
+                  if (isFolder) {
                     viewModel.navigateToFolder(item);
-                  else
+                  } else {
                     _openFileViewer(context, item as FileItem);
+                  }
                 },
                 child: Padding(
                   padding: const EdgeInsets.all(16.0),
@@ -913,8 +1034,6 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
               ),
             ),
           ),
-
-          // 🌟 MAVİ TİK SADECE "SEÇİLMİŞ" İSE ÇIKAR (Aktif/Odaklıysa çıkmaz)
           if (isSelected)
             Positioned(
               top: 10,
@@ -940,145 +1059,6 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
               ),
             ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildGlassHeader(StorageViewModel viewModel) {
-    return ClipRRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(
-          sigmaX: 15 * ThemeColors.glassBlurOpacity,
-          sigmaY: 15 * ThemeColors.glassBlurOpacity,
-        ),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          decoration: BoxDecoration(
-            color: ThemeColors.sidePanelColor.withOpacity(0.8),
-            border: Border(
-              bottom: BorderSide(
-                color: ThemeColors.titleText.withOpacity(0.05),
-              ),
-            ),
-          ),
-          child: Row(
-            children: [
-              if (!viewModel.isAtRoot)
-                Container(
-                  margin: const EdgeInsets.only(right: 12),
-                  decoration: BoxDecoration(
-                    color: ThemeColors.surface,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
-                        blurRadius: 5,
-                      ),
-                    ],
-                  ),
-                  child: IconButton(
-                    icon: Icon(
-                      Icons.arrow_back_rounded,
-                      color: ThemeColors.titleText,
-                    ),
-                    onPressed: () => viewModel.goBack(),
-                  ),
-                ),
-              Text(
-                viewModel.currentFolderName,
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: ThemeColors.titleText,
-                ),
-              ),
-              const SizedBox(width: 32),
-              Expanded(
-                child: Container(
-                  height: 44,
-                  constraints: const BoxConstraints(maxWidth: 500),
-                  child: TextField(
-                    onChanged: (value) => viewModel.setSearchQuery(value),
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: ThemeColors.titleText,
-                    ),
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: ThemeColors.titleText.withOpacity(0.04),
-                      hintText: "${viewModel.currentFolderName} içinde ara...",
-                      hintStyle: TextStyle(
-                        color: ThemeColors.captionText.withOpacity(0.7),
-                        fontSize: 14,
-                      ),
-                      prefixIcon: Icon(
-                        Icons.search_rounded,
-                        size: 20,
-                        color: ThemeColors.captionText,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide(
-                          color: ThemeColors.titleText.withOpacity(0.05),
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide(
-                          color: ThemeColors.primary.withOpacity(0.5),
-                          width: 2,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const Spacer(),
-              Container(
-                decoration: BoxDecoration(
-                  color: ThemeColors.surface,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: ThemeColors.titleText.withOpacity(0.05),
-                  ),
-                ),
-                child: IconButton(
-                  onPressed: () => _showCreateFolderDialog(context),
-                  icon: Icon(
-                    Icons.create_new_folder_rounded,
-                    color: ThemeColors.titleText,
-                  ),
-                  tooltip: "Yeni Klasör",
-                ),
-              ),
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
-                onPressed: () => context.go('/upload'),
-                icon: const Icon(Icons.cloud_upload_rounded),
-                label: const Text(
-                  "Dosya Yükle",
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: ThemeColors.primary,
-                  foregroundColor: Colors.white,
-                  elevation: 4,
-                  shadowColor: ThemeColors.primary.withOpacity(0.4),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 18,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -1187,10 +1167,11 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
             ),
             ElevatedButton(
               onPressed: () {
-                if (isFolder)
+                if (isFolder) {
                   viewModel.renameFolder(item, controller.text);
-                else
+                } else {
                   viewModel.renameFile(item as FileItem, controller.text);
+                }
                 Navigator.pop(context);
               },
               style: ElevatedButton.styleFrom(
@@ -1212,7 +1193,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
     );
   }
 
-  void _showDeleteDialog(
+  void _showTrashDialog(
     BuildContext context,
     StorageViewModel viewModel, {
     dynamic singleItem,
@@ -1220,6 +1201,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
     final int deleteCount = singleItem != null
         ? 1
         : (viewModel.selectedFolders.length + viewModel.selectedFiles.length);
+
     showDialog(
       context: context,
       barrierColor: ThemeColors.background.withOpacity(0.5),
@@ -1236,17 +1218,17 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.redAccent.withOpacity(0.1),
+                  color: Colors.orangeAccent.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(
-                  Icons.delete_forever_rounded,
-                  color: Colors.redAccent,
+                  Icons.delete_outline_rounded,
+                  color: Colors.orangeAccent,
                 ),
               ),
               const SizedBox(width: 12),
               Text(
-                "Kalıcı Olarak Sil",
+                "Çöpe Taşı",
                 style: TextStyle(
                   color: ThemeColors.titleText,
                   fontWeight: FontWeight.bold,
@@ -1255,9 +1237,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
             ],
           ),
           content: Text(
-            deleteCount == 1
-                ? "Bu öğeyi kalıcı olarak silmek istediğinize emin misiniz? Bu işlem geri alınamaz."
-                : "Seçili olan $deleteCount öğeyi kalıcı olarak silmek istediğinize emin misiniz? Bu işlem geri alınamaz.",
+            "Seçilen $deleteCount öğe Geri Dönüşüm Kutusu'na taşınacak. İstediğiniz zaman geri yükleyebilirsiniz.",
             style: TextStyle(color: ThemeColors.captionText, height: 1.5),
           ),
           actionsPadding: const EdgeInsets.all(20),
@@ -1276,16 +1256,17 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
               onPressed: () {
                 if (singleItem != null) {
                   viewModel.clearSelection();
-                  if (singleItem is FolderItem)
+                  if (singleItem is FolderItem) {
                     viewModel.toggleFolderSelection(singleItem);
-                  else
+                  } else {
                     viewModel.toggleFileSelection(singleItem as FileItem);
+                  }
                 }
-                viewModel.deleteSelected();
+                viewModel.moveToTrash();
                 Navigator.pop(context);
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
+                backgroundColor: Colors.orangeAccent,
                 foregroundColor: Colors.white,
                 elevation: 0,
                 padding: const EdgeInsets.symmetric(
@@ -1297,7 +1278,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                 ),
               ),
               child: const Text(
-                "Sil",
+                "Çöpe Taşı",
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ),

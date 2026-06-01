@@ -192,9 +192,9 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
         }
 
         baseTheme = baseTheme.copyWith(
-          textTheme: baseTheme.textTheme.apply(fontFamily: 'Inter'),
+          textTheme: baseTheme.textTheme.apply(fontFamily: 'Montserrat'),
           primaryTextTheme: baseTheme.primaryTextTheme.apply(
-            fontFamily: 'Inter',
+            fontFamily: 'Montserrat',
           ),
         );
 

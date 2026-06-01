@@ -1,4 +1,4 @@
-// apps/mostromo_connect/lib/features/storage/viewmodels/storage_view_model.dart
+// lib/features/storage/viewmodels/storage_view_model.dart
 
 import 'dart:async';
 import 'dart:convert';
@@ -75,6 +75,21 @@ class StorageViewModel extends ChangeNotifier {
   StreamSubscription<String>? _syncSubscription;
   Timer? _statusTimer;
 
+  // 🌟 YENİ: ÇÖP KUTUSU MODU (Hatanın Sebebi Burasıydı)
+  bool _isTrashMode = false;
+  bool get isTrashMode => _isTrashMode;
+
+  void setTrashMode(bool value) {
+    if (_isTrashMode != value) {
+      _isTrashMode = value;
+      _navigationStack.clear();
+      _navigationStack.add(0);
+      clearSelection();
+      closeInfoPanel();
+      notifyListeners();
+    }
+  }
+
   List<FolderItem> get allFolders => _allFolders;
   List<FileItem> get allFiles => _allFiles;
   List<UploadItem> get pendingUploads => _pendingUploads;
@@ -101,32 +116,78 @@ class StorageViewModel extends ChangeNotifier {
   bool get isSelectionMode =>
       _selectedFolders.isNotEmpty || _selectedFiles.isNotEmpty;
 
-  List<FolderItem> get visibleFolders {
+  // =====================================================================
+  // 🌟 BAĞIMSIZ LİSTELER
+  // =====================================================================
+
+  List<FolderItem> get activeFolders {
     var folders = _allFolders
-        .where((folder) => folder.parentId == currentFolderId)
+        .where((f) => !f.isTrashed && f.parentId == currentFolderId)
         .toList();
-    if (_searchQuery.isNotEmpty)
+    if (_searchQuery.isNotEmpty) {
       folders = folders
           .where(
             (f) =>
                 f.folderName.toLowerCase().contains(_searchQuery.toLowerCase()),
           )
           .toList();
+    }
     folders.sort((a, b) => a.folderName.compareTo(b.folderName));
     return folders;
   }
 
-  List<FileItem> get visibleFiles {
+  List<FileItem> get activeFiles {
     var files = _allFiles
-        .where((file) => file.folderId == currentFolderId)
+        .where((f) => !f.isTrashed && f.folderId == currentFolderId)
         .toList();
-    if (_searchQuery.isNotEmpty)
+    if (_searchQuery.isNotEmpty) {
       files = files
           .where(
             (f) =>
                 f.fileName.toLowerCase().contains(_searchQuery.toLowerCase()),
           )
           .toList();
+    }
+    files.sort((a, b) {
+      try {
+        final dateA = (a.lastUpdated != null && a.lastUpdated!.isNotEmpty)
+            ? DateTime.parse(a.lastUpdated!)
+            : DateTime.parse(a.createdAt);
+        final dateB = (b.lastUpdated != null && b.lastUpdated!.isNotEmpty)
+            ? DateTime.parse(b.lastUpdated!)
+            : DateTime.parse(b.createdAt);
+        return dateB.compareTo(dateA);
+      } catch (e) {
+        return 0;
+      }
+    });
+    return files;
+  }
+
+  List<FolderItem> get trashFolders {
+    var folders = _allFolders.where((f) => f.isTrashed).toList();
+    if (_searchQuery.isNotEmpty) {
+      folders = folders
+          .where(
+            (f) =>
+                f.folderName.toLowerCase().contains(_searchQuery.toLowerCase()),
+          )
+          .toList();
+    }
+    folders.sort((a, b) => a.folderName.compareTo(b.folderName));
+    return folders;
+  }
+
+  List<FileItem> get trashFiles {
+    var files = _allFiles.where((f) => f.isTrashed).toList();
+    if (_searchQuery.isNotEmpty) {
+      files = files
+          .where(
+            (f) =>
+                f.fileName.toLowerCase().contains(_searchQuery.toLowerCase()),
+          )
+          .toList();
+    }
     files.sort((a, b) {
       try {
         final dateA = (a.lastUpdated != null && a.lastUpdated!.isNotEmpty)
@@ -493,9 +554,37 @@ class StorageViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> deleteSelected() async {
+  // =====================================================================
+  // 🌟 SİLME MOTORLARI (Çöpe At & Kalıcı Sil)
+  // =====================================================================
+
+  Future<void> moveToTrash() async {
     _isLoading = true;
     notifyListeners();
+
+    final List<FolderItem> foldersToDelete = _selectedFolders.toList();
+    final List<FileItem> filesToDelete = _selectedFiles.toList();
+
+    if (await SyncService.trashItems(
+      folders: foldersToDelete,
+      files: filesToDelete,
+    )) {
+      await fetchData();
+      _updateSyncStatus('🗑️ Öğeler Geri Dönüşüm Kutusuna taşındı.');
+    } else {
+      _updateSyncStatus('❌ Öğeler silinemedi.');
+    }
+
+    clearSelection();
+    closeInfoPanel();
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  Future<void> deletePermanently() async {
+    _isLoading = true;
+    notifyListeners();
+
     final List<FolderItem> foldersToDelete = _selectedFolders.toList();
     final List<FileItem> filesToDelete = _selectedFiles.toList();
     int successFileCount = 0;
@@ -516,8 +605,28 @@ class StorageViewModel extends ChangeNotifier {
     }
 
     _updateSyncStatus(
-      '✅ $successFolderCount klasör, $successFileCount dosya silindi.',
+      '✅ $successFolderCount klasör, $successFileCount dosya kalıcı olarak silindi.',
     );
+    clearSelection();
+    closeInfoPanel();
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  Future<void> restoreSelected() async {
+    _isLoading = true;
+    notifyListeners();
+
+    if (await SyncService.restoreItems(
+      folders: _selectedFolders.toList(),
+      files: _selectedFiles.toList(),
+    )) {
+      await fetchData();
+      _updateSyncStatus('✅ Öğeler başarıyla geri yüklendi.');
+    } else {
+      _updateSyncStatus('❌ Öğeler geri yüklenemedi.');
+    }
+
     clearSelection();
     closeInfoPanel();
     _isLoading = false;
@@ -595,9 +704,14 @@ class StorageViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void selectAll() {
-    _selectedFolders.addAll(visibleFolders);
-    _selectedFiles.addAll(visibleFiles);
+  void selectAll({bool isTrash = false}) {
+    if (isTrash) {
+      _selectedFolders.addAll(trashFolders);
+      _selectedFiles.addAll(trashFiles);
+    } else {
+      _selectedFolders.addAll(activeFolders);
+      _selectedFiles.addAll(activeFiles);
+    }
     notifyListeners();
   }
 
@@ -760,7 +874,7 @@ class StorageViewModel extends ChangeNotifier {
   }
 
   // =====================================================================
-  // 📥 KESİNTİSİZ İNDİRME MOTORU (TÜM BLOKLAYAN KODLAR ASENKRON YAPILDI)
+  // 📥 KESİNTİSİZ ASENKRON İNDİRME MOTORU
   // =====================================================================
   final List<DownloadItem> _activeDownloads = [];
   List<DownloadItem> get activeDownloads => _activeDownloads;
@@ -840,7 +954,7 @@ class StorageViewModel extends ChangeNotifier {
 
       if (response.statusCode == 200 && startByte > 0) {
         startByte = 0;
-        await file.writeAsBytes([]); // 🌟 YENİ: Asenkron dosya temizliği
+        await file.writeAsBytes([]);
       }
 
       if (startByte == item.totalBytes && item.totalBytes > 0) {
@@ -850,37 +964,28 @@ class StorageViewModel extends ChangeNotifier {
         return;
       }
 
-      // 🌟 YENİ 1: Dosyayı ASENKRON (Main Isolate'i bloklamayacak şekilde) aç!
       final raf = await file.open(mode: FileMode.append);
       final stream = response.data!.stream;
 
       int downloaded = startByte;
-
-      // 🌟 YENİ 2: Sadece %1 bazlı değil, KRONOMETRE bazlı (100ms) UI Throttle.
-      // Bu sayede yüzbinlerce chunk gelse bile ekran saniyede max 10 kez çizilir, asla kasmaz!
       final stopwatch = Stopwatch()..start();
 
       await for (var chunk in stream) {
         if (item.cancelToken!.isCancelled) break;
 
-        // 🌟 YENİ 3: Diske yazma işlemini ASENKRON yap!
-        // Böylece yazma işlemi devam ederken sen uygulamada rahatça gezebilirsin.
         await raf.writeFrom(chunk);
-
         downloaded += chunk.length;
         item.downloadedBytes = downloaded;
 
         if (item.totalBytes > 0) {
           item.progress = downloaded / item.totalBytes;
 
-          // Sadece 100 milisaniye geçtiyse veya indirme tamamen bittiyse ekranı güncelle
           if (stopwatch.elapsedMilliseconds > 100 ||
               downloaded == item.totalBytes) {
             notifyListeners();
-            stopwatch.reset(); // Kronometreyi sıfırla ve yeniden saymaya başla
+            stopwatch.reset();
           }
         } else {
-          // Boyut bilinmiyorsa yine 100ms'de bir güncelle
           if (stopwatch.elapsedMilliseconds > 100) {
             notifyListeners();
             stopwatch.reset();
@@ -888,7 +993,6 @@ class StorageViewModel extends ChangeNotifier {
         }
       }
 
-      // 🌟 YENİ 4: Asenkron Kapatma
       await raf.close();
 
       if (!item.cancelToken!.isCancelled) {

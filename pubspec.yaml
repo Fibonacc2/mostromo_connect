@@ -51,4 +51,16 @@ flutter:
 fonts:
   - family: Inter
     fonts:
-      - asset: assets/fonts/Inter-VariableFont_opsz,wght.ttf
+      - asset: assets/fonts/Inter-VariableFont_opsz_wght.ttf
+  - family: Nunito
+    fonts:
+      - asset: assets/fonts/Nunito-VariableFont_wght.ttf
+  - family: Poppins
+    fonts:
+      - asset: assets/fonts/Poppins-Regular.ttf
+  - family: OpenSans
+    fonts:
+      - asset: assets/fonts/OpenSans-VariableFont_wdth_wght.ttf
+  - family: Montserrat
+    fonts:
+      - asset: assets/fonts/Montserrat.ttf

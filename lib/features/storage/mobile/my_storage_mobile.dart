@@ -1,3 +1,5 @@
+// lib/features/storage/mobile/my_storage_mobile.dart
+
 import 'package:common_ui/views/widgets/scaffold.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -8,12 +10,9 @@ import 'package:mostromo_connect/features/storage/viewmodels/storage_view_model.
 import 'dart:math';
 import 'package:provider/provider.dart';
 
-// Modelleri ve Servisleri import et
 import 'package:shared_core/models/file_model.dart';
 import 'package:shared_core/models/folder_model.dart';
 import 'package:shared_core/services/file_download_service.dart';
-
-import 'package:shared_core/services/upload_file_service.dart';
 
 class MyStorageMobilePage extends StatefulWidget {
   const MyStorageMobilePage({super.key});
@@ -23,7 +22,6 @@ class MyStorageMobilePage extends StatefulWidget {
 }
 
 class _MyStorageMobileState extends State<MyStorageMobilePage> {
-  // ✅ GÜNCELLENDİ: Bu controller artık hem klasör hem dosya adlandırma için ortak
   final TextEditingController _nameController = TextEditingController();
   final ScrollController _pageScrollController = ScrollController();
 
@@ -32,13 +30,19 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
   @override
   void initState() {
     super.initState();
-    // ✅ 2. Navigasyon olaylarını dinle
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<NavEventProvider>().addListener(_handleNavEvent);
+
+      // 🌟 Sayfa açılır açılmaz ViewModel'i NORMAL Moda geçiririz
+      context.read<StorageViewModel>().setTrashMode(false);
+
+      if (context.read<StorageViewModel>().allFolders.isEmpty &&
+          context.read<StorageViewModel>().allFiles.isEmpty) {
+        context.read<StorageViewModel>().fetchData();
+      }
     });
   }
 
-  // ✅ 3. Referansı widget henüz aktifken (context güvenliyken) kaydedin
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -47,7 +51,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
 
   void _handleNavEvent() {
     final nav = context.read<NavEventProvider>();
-    // Eğer bu sekmedeysek ve tekrar basıldıysa üste git
     if (nav.activeTab == 0 && mounted && _pageScrollController.hasClients) {
       _pageScrollController.animateTo(
         0,
@@ -65,22 +68,18 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     super.dispose();
   }
 
-  // --- 1. ANA BUILD METODU ---
   @override
   Widget build(BuildContext context) {
     return Consumer<StorageViewModel>(
       builder: (context, viewModel, child) {
-        // AppBar içeriklerini seçim moduna ve klasör derinliğine göre burada hazırlıyoruz
         final bool isSelection = viewModel.isSelectionMode;
 
-        // Başlık
         final Widget titleWidget = Text(
           isSelection
               ? '${viewModel.selectedFiles.length + viewModel.selectedFolders.length} öğe seçildi'
               : _getAppBarTitle(viewModel),
         );
 
-        // Sol Buton (Leading)
         final Widget? leadingWidget = isSelection
             ? IconButton(
                 icon: const Icon(Icons.close),
@@ -94,7 +93,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
                       onPressed: () => viewModel.goBack(),
                     ));
 
-        // Sağ Butonlar (Actions)
         final List<Widget> actionWidgets = isSelection
             ? []
             : [
@@ -130,22 +128,18 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
             leading: leadingWidget,
             actions: actionWidgets,
             onRefresh: () => viewModel.fetchData(),
-            // FAB: Seçim modunda gizlenir
             floatingActionButton: !isSelection
                 ? _buildUploadFab(context, viewModel.currentFolderId)
                 : null,
-            // Alt Menü: Sadece seçim modunda görünür
             bottomBar: _buildBottomActionbar(context, viewModel),
             body: Column(
               children: [
-                // Durum çubuğu (Senkronizasyon mesajları)
                 AnimatedSwitcher(
                   duration: const Duration(milliseconds: 300),
                   child: viewModel.syncStatus.isNotEmpty
                       ? _buildSyncStatus(viewModel.syncStatus)
                       : const SizedBox.shrink(),
                 ),
-                // Ana Liste İçeriği
                 _buildContent(context, viewModel),
               ],
             ),
@@ -155,11 +149,11 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  // --- 3. ANA İÇERİK (LİSTE) ---
   Widget _buildContent(BuildContext context, StorageViewModel viewModel) {
+    // 🌟 GÜNCELLENDİ: Hata veren yer activeFiles ve activeFolders ile değiştirildi
     if (viewModel.isLoading &&
-        viewModel.visibleFiles.isEmpty &&
-        viewModel.visibleFolders.isEmpty) {
+        viewModel.activeFiles.isEmpty &&
+        viewModel.activeFolders.isEmpty) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.only(top: 100),
@@ -174,8 +168,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
       return _buildEmptyState(viewModel);
     }
 
-    // RefreshIndicator'ı MostromoScaffold'un CustomScrollView'u ile
-    // uyumlu çalışması için burada ListView'ı sarmalıyoruz.
     return ListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -194,13 +186,13 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  // Verileri tarih gruplarıyla birleştiren eksik metod
   List<dynamic> _buildCombinedList(StorageViewModel viewModel) {
     final List<dynamic> combinedList = [];
-    combinedList.addAll(viewModel.visibleFolders);
+    combinedList.addAll(viewModel.activeFolders); // 🌟 GÜNCELLENDİ
 
     final Map<String, List<FileItem>> groupedFiles = {};
-    for (var file in viewModel.visibleFiles) {
+    for (var file in viewModel.activeFiles) {
+      // 🌟 GÜNCELLENDİ
       try {
         final date = DateTime.parse(file.createdAt);
         final key = _getGroupKey(date);
@@ -218,34 +210,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     });
     return combinedList;
   }
-  /*
-  // Tarih gruplama anahtarı
-  String _getGroupKey(DateTime date) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final yesterday = DateTime(now.year, now.month, now.day - 1);
-    final checkDate = DateTime(date.year, date.month, date.day);
 
-    if (checkDate == today) return 'Bugün';
-    if (checkDate == yesterday) return 'Dün';
-    final difference = today.difference(checkDate).inDays;
-    if (difference < 7) return 'Bu Hafta';
-    if (difference < 30) return 'Bu Ay';
-    return DateFormat.yMMMM('tr_TR').format(date);
-  }
-*/
-  /* 
- Widget _buildGroupHeader(String title) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 8.0),
-      child: Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey[700])),
-    );
-  }
-*/
-
-  // --- 2. YARDIMCI METODLAR ---
-
-  // AppBar başlığını belirleyen eksik metod
   String _getAppBarTitle(StorageViewModel viewModel) {
     if (viewModel.isAtRoot) return 'Dosyalarım';
     final currentFolder = viewModel.allFolders.firstWhere(
@@ -256,7 +221,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     return currentFolder.folderName;
   }
 
-  // Senkronizasyon durum çubuğu
   Widget _buildSyncStatus(String syncStatus) {
     final statusColor = syncStatus.contains('Hata') ? Colors.red : Colors.blue;
     return Container(
@@ -274,9 +238,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  // --- 4. LİSTE ELEMANLARI (KLASÖR, DOSYA, BOŞ SAYFA, BAŞLIK) ---
-
-  /// Tarih grupları için başlık
   Widget _buildGroupHeader(String title) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 8.0),
@@ -291,7 +252,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  /// Klasör listesi elemanını çizer
   Widget _buildFolderItem(
     BuildContext context,
     StorageViewModel viewModel,
@@ -346,7 +306,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  /// Dosya listesi elemanını çizer
   Widget _buildFileItem(
     BuildContext context,
     StorageViewModel viewModel,
@@ -388,14 +347,13 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
           if (viewModel.isSelectionMode) {
             viewModel.toggleFileSelection(file);
           } else {
-            _showFileOptions(context, viewModel, file); // Menüyü aç
+            _showFileOptions(context, viewModel, file);
           }
         },
       ),
     );
   }
 
-  /// Boş klasör ekranı
   Widget _buildEmptyState(StorageViewModel viewModel) {
     return Center(
       child: Padding(
@@ -427,12 +385,9 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  // --- 5. EYLEM BUTONLARI (FAB, BOTTOM BAR) ---
-
-  /// Yükleme (Upload) Butonu
   Widget _buildUploadFab(BuildContext context, int currentFolderId) {
     return FloatingActionButton(
-      backgroundColor: Colors.blue, // ThemeColors.buttonPrimary kullanabilirsin
+      backgroundColor: Colors.blue,
       child: const Icon(Icons.add_rounded, color: Colors.white, size: 28),
       onPressed: () {
         context.push('/upload_file', extra: currentFolderId);
@@ -440,7 +395,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  /// Çoklu seçim alt eylem çubuğu
   Widget? _buildBottomActionbar(
     BuildContext context,
     StorageViewModel viewModel,
@@ -449,24 +403,20 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
 
     final bool filesSelected = viewModel.selectedFiles.isNotEmpty;
     final bool foldersSelected = viewModel.selectedFolders.isNotEmpty;
-    // Sadece 1 KLASÖR seçiliyse ve HİÇ dosya seçili değilse Adlandır'ı göster
     final bool canRename =
         (viewModel.selectedFolders.length == 1) && !filesSelected;
 
     List<Widget> actions = [];
 
-    // --- SENARYO 1: "Yeniden Adlandır" (Sadece 1 klasör seçili)
     if (canRename) {
       actions.add(
         _buildBottomActionItem(Icons.drive_file_rename_outline, 'Adlandır', () {
-          // Seçili olan o tek klasörü al
           final folderToRename = viewModel.selectedFolders.first;
           _showRenameFolderDialog(context, viewModel, folderToRename);
         }),
       );
     }
 
-    // --- SENARYO 2: "İndir" (En az 1 dosya seçili VE hiç klasör seçili değil)
     if (filesSelected && !foldersSelected) {
       actions.add(
         _buildBottomActionItem(
@@ -476,22 +426,22 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
         ),
       );
     }
-    // --- SENARYO 3: "Taşı"
+
     if (filesSelected || foldersSelected) {
       actions.add(
-        _buildBottomActionItem(Icons.drive_file_move_outline, 'Taşı', () {
-          // Taşıma diyalogunu aç
-          _showMoveDialog(context, viewModel);
-        }),
+        _buildBottomActionItem(
+          Icons.drive_file_move_outline,
+          'Taşı',
+          () => _showMoveDialog(context, viewModel),
+        ),
       );
     }
 
-    // --- SENARYO 3: "Sil" (Her zaman, yeter ki bir şey seçili olsun)
     if (filesSelected || foldersSelected) {
       actions.add(
         _buildBottomActionItem(
           Icons.delete_outline,
-          'Sil',
+          'Çöpe At', // 🌟 GÜNCELLENDİ
           () => _deleteSelectedItems(context, viewModel),
         ),
       );
@@ -502,7 +452,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
       elevation: 8.0,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: actions, // Dinamik olarak oluşturulan butonları ekle
+        children: actions,
       ),
     );
   }
@@ -529,9 +479,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  // --- 6. DİYALOGLAR VE MENÜLER (BOTTOM SHEET) ---
-
-  /// Tekil dosya menüsünü gösterir
   void _showFileOptions(
     BuildContext context,
     StorageViewModel viewModel,
@@ -557,7 +504,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
             _buildActionTile(
               Icons.open_in_new,
               'Aç',
-              () => _openFileViewer(context, file), // Yönlendiriciyi çağır
+              () => _openFileViewer(context, file),
             ),
             _buildActionTile(
               Icons.drive_file_rename_outline,
@@ -567,7 +514,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
             _buildActionTile(
               Icons.download,
               'İndir',
-              () => _downloadFile(context, file), // Tekil indirme
+              () => _downloadFile(context, file),
             ),
             _buildActionTile(
               Icons.info,
@@ -577,8 +524,8 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
             const Divider(height: 1),
             _buildActionTile(
               Icons.delete_outline,
-              'Sil',
-              () => _deleteFile(context, viewModel, file), // Tekil silme
+              'Çöpe At', // 🌟 GÜNCELLENDİ
+              () => _deleteFile(context, viewModel, file),
               isDestructive: true,
             ),
           ],
@@ -587,7 +534,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  /// "Yeni Klasör" oluşturma diyalogunu gösterir
   void _showCreateFolderDialog(
     BuildContext context,
     StorageViewModel viewModel,
@@ -624,16 +570,15 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  /// Silme onayı diyalogu
   Future<bool?> _showDeleteConfirmation(BuildContext context, {int count = 1}) {
     return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(count > 1 ? '$count Öğeyi Sil' : 'Dosyayı Sil'),
+        title: Text(count > 1 ? '$count Öğeyi Çöpe Taşı' : 'Dosyayı Çöpe Taşı'),
         content: Text(
           count > 1
-              ? 'Seçili $count öğeyi sunucudan kalıcı olarak silmek istediğinizden emin misiniz?'
-              : 'Bu dosyayı sunucudan kalıcı olarak silmek istediğinizden emin misiniz?',
+              ? 'Seçili $count öğeyi Geri Dönüşüm Kutusuna taşımak istediğinize emin misiniz?'
+              : 'Bu dosyayı Geri Dönüşüm Kutusuna taşımak istediğinize emin misiniz?',
         ),
         actions: [
           TextButton(
@@ -642,8 +587,8 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Sil'),
+            style: TextButton.styleFrom(foregroundColor: Colors.orange),
+            child: const Text('Çöpe At'),
           ),
         ],
       ),
@@ -655,9 +600,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     StorageViewModel viewModel,
     FolderItem folder,
   ) {
-    // Controller'ı klasörün mevcut adıyla doldur
     _nameController.text = folder.folderName;
-
     showDialog(
       context: context,
       builder: (context) {
@@ -678,10 +621,9 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
                 final newName = _nameController.text.trim();
                 if (newName.isNotEmpty && newName != folder.folderName) {
                   Navigator.pop(context);
-                  // "Beyin"deki renameFolder fonksiyonunu çağır
                   viewModel.renameFolder(folder, newName);
                 } else {
-                  Navigator.pop(context); // Değişiklik yoksa kapat
+                  Navigator.pop(context);
                 }
               },
               child: const Text('Kaydet'),
@@ -696,22 +638,14 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     showDialog(
       context: context,
       builder: (dialogContext) {
-        // ViewModel'den tüm klasör listesini al
         final allFolders = viewModel.allFolders;
-        // Taşınacak öğelerin (dosya veya klasör) içinde bulunduğu klasörü
-        // ve kendilerini listeden çıkar (kendi içine taşıyamazsın)
         final selectableFolders = allFolders.where((folder) {
-          // Klasörün kendisini listeden çıkar
           if (viewModel.selectedFolders.contains(folder)) return false;
-          // Ana Dizini (ID: 0) her zaman göster
           if (folder.folderId == 0) return true;
-          // Öğelerin zaten içinde olduğu klasörü gösterme
           if (folder.folderId == viewModel.currentFolderId) return false;
-
           return true;
         }).toList();
 
-        // Ana Dizini (ID: 0) manuel olarak ekle (eğer veritabanından gelmiyorsa)
         if (!selectableFolders.any((f) => f.folderId == 0)) {
           selectableFolders.insert(
             0,
@@ -721,9 +655,8 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
 
         return AlertDialog(
           title: const Text('Taşınacak Klasörü Seçin'),
-          content: Container(
+          content: SizedBox(
             width: double.maxFinite,
-            // Klasör listesi çok uzun olabilir, kaydırılabilir yap
             child: ListView.builder(
               shrinkWrap: true,
               itemCount: selectableFolders.length,
@@ -733,11 +666,8 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
                   leading: const Icon(Icons.folder_open),
                   title: Text(folder.folderName),
                   onTap: () {
-                    // Tıklandığında taşıma işlemini başlat
-                    Navigator.pop(dialogContext); // Diyalogu kapat
-                    viewModel.moveSelectedItems(
-                      folder.folderId,
-                    ); // "Beyin"deki fonk. çağır
+                    Navigator.pop(dialogContext);
+                    viewModel.moveSelectedItems(folder.folderId);
                   },
                 );
               },
@@ -765,9 +695,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     if (file.fileName.contains('.')) {
       int dotIndex = file.fileName.lastIndexOf('.');
       if (dotIndex != -1) {
-        // "dosya.pdf" -> "dosya"
         nameWithoutExtension = file.fileName.substring(0, dotIndex);
-        // "dosya.pdf" -> ".pdf" (Nokta dahil)
         extension = file.fileName.substring(dotIndex);
       }
     }
@@ -784,7 +712,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
             autofocus: true,
             decoration: InputDecoration(
               labelText: 'Dosya Adı',
-              // Uzantıyı ipucu olarak göster
               suffixText: extension.isNotEmpty ? extension : null,
             ),
           ),
@@ -798,7 +725,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
                 final newName = _nameController.text.trim();
                 if (newName.isNotEmpty && newName != nameWithoutExtension) {
                   Navigator.pop(context);
-                  // "Beyin"deki renameFile fonksiyonunu çağır (Uzantıyı ViewModel ekler)
                   viewModel.renameFile(file, newName);
                 } else {
                   Navigator.pop(context);
@@ -812,9 +738,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  // --- 7. ALT SEVİYE EYLEMLER (Servisleri çağıranlar) ---
-
-  /// "Beyin"deki tekil silme fonksiyonunu onay alarak çağırır
   Future<void> _deleteFile(
     BuildContext context,
     StorageViewModel viewModel,
@@ -822,12 +745,10 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
   ) async {
     final bool? confirmed = await _showDeleteConfirmation(context);
     if (confirmed != true) return;
-    viewModel.toggleFileSelection(file); // Önce seç
-    await viewModel.deleteSelected(); // Sonra seçilileri sil
-    // SnackBar kaldırıldı, ViewModel'in durum çubuğu halledecek
+    viewModel.toggleFileSelection(file);
+    await viewModel.moveToTrash(); // 🌟 GÜNCELLENDİ
   }
 
-  /// "Beyin"deki toplu silme fonksiyonunu onay alarak çağırır
   Future<void> _deleteSelectedItems(
     BuildContext context,
     StorageViewModel viewModel,
@@ -842,11 +763,9 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
     if (confirmed != true) return;
 
-    await viewModel.deleteSelected();
-    // SnackBar kaldırıldı, ViewModel'in durum çubuğu halledecek
+    await viewModel.moveToTrash(); // 🌟 GÜNCELLENDİ
   }
 
-  /// Toplu indirme (İndirme işlemleri SnackBar kullanmaya devam ediyor)
   Future<void> _downloadSelectedFiles(
     BuildContext context,
     StorageViewModel viewModel,
@@ -854,10 +773,9 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     int successCount = 0;
     int errorCount = 0;
     final filesToDownload = viewModel.selectedFiles.toList();
-    // (Klasör indirme desteklenmiyor, sadece dosyalar)
 
     if (filesToDownload.isEmpty) {
-      viewModel.clearSelection(); // Sadece klasör seçildiyse seçimi temizle
+      viewModel.clearSelection();
       return;
     }
 
@@ -883,7 +801,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     }
   }
 
-  /// Tekil indirme
   Future<void> _downloadFile(BuildContext context, FileItem file) async {
     final result = await FileDownloadService.requestDownload(file);
     if (context.mounted) {
@@ -900,7 +817,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     }
   }
 
-  /// Dosya görüntüleyici yönlendiricisi
   void _openFileViewer(BuildContext context, FileItem file) {
     switch (file.fileType) {
       case 'media/img':
@@ -942,7 +858,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
   }
 
   void _showFileDetails(BuildContext context, FileItem file) {
-    // Tarih ve etiketi seç
     final bool hasUpdate =
         file.lastUpdated != null && file.lastUpdated!.isNotEmpty;
     final String dateString = hasUpdate ? file.lastUpdated! : file.createdAt;
@@ -971,9 +886,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
   }
 
-  // --- 8. YARDIMCI METODLAR (Formatlama, İkonlar, Renkler) ---
-
-  /// ✅ YENİ: Tarih gruplaması için eklendi (Eski koddan geri alındı)
   String _getGroupKey(DateTime date) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -988,56 +900,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     if (difference < 30) return 'Bu Ay';
 
     return DateFormat.yMMMM('tr_TR').format(date);
-  }
-
-  /*
-  Widget _buildSyncStatus(String syncStatus) {
-    final statusColor = _getStatusColor(syncStatus);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      color: statusColor.withAlpha((255 * 0.1).round()),
-      child: Row(
-        children: [
-          _getStatusIcon(syncStatus),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              syncStatus,
-              style: TextStyle(
-                fontSize: 12,
-                color: statusColor,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-*/
-  Color _getStatusColor(String syncStatus) {
-    if (syncStatus.contains('Hata')) return Colors.red;
-    if (syncStatus.contains('Başarı') || syncStatus.contains('güncel'))
-      return Colors.green;
-    return Colors.blue;
-  }
-
-  Widget _getStatusIcon(String syncStatus) {
-    if (syncStatus.contains('...') || syncStatus.contains('Senkronize')) {
-      return const SizedBox(
-        width: 16,
-        height: 16,
-        child: CircularProgressIndicator(strokeWidth: 2),
-      );
-    }
-    if (syncStatus.contains('Başarı') || syncStatus.contains('güncel')) {
-      return const Icon(Icons.check_circle, size: 16, color: Colors.green);
-    }
-    if (syncStatus.contains('Hata')) {
-      return const Icon(Icons.error, size: 16, color: Colors.red);
-    }
-    return const Icon(Icons.info, size: 16, color: Colors.blue);
   }
 
   Widget _buildFileIcon(FileItem file) {
@@ -1121,13 +983,10 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
       final date = DateTime.parse(dateString);
       final now = DateTime.now();
       final difference = now.difference(date);
-
-      if (difference.inDays == 0) {
+      if (difference.inDays == 0)
         return 'Bugün ${DateFormat('HH:mm').format(date)}';
-      }
-      if (difference.inDays == 1) {
+      if (difference.inDays == 1)
         return 'Dün ${DateFormat('HH:mm').format(date)}';
-      }
       if (difference.inDays < 7) return '${difference.inDays} gün önce';
       return DateFormat('dd.MM.yyyy').format(date);
     } catch (e) {

@@ -13,6 +13,8 @@ import 'package:provider/provider.dart';
 import 'package:shared_core/models/file_model.dart';
 import 'package:mostromo_icons/mostromo_icons.dart';
 
+import '../features/storage/viewmodels/storage_view_model.dart'; // 🌟 YENİ EKLENDİ (clearSelection için)
+
 // SAYFALAR
 import '../features/storage/my_storage_page.dart';
 import '../features/storage/search_page.dart';
@@ -25,8 +27,9 @@ import '../features/viewers/storage_media_viewer.dart';
 // MASAÜSTÜ ÖZEL SAYFALARI
 import '../features/storage/windows/upload_windows_page.dart';
 import '../features/storage/windows/workspaces_page.dart';
+import '../features/storage/windows/my_storage_windows.dart';
+import '../features/storage/windows/trash_windows_page.dart';
 
-// ✅ PLATFORM KONTROLÜ: Rotaları ve Menüleri ayırmak için global değişken
 final bool isDesktopOS =
     kIsWeb || Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 
@@ -41,16 +44,12 @@ class AppRouter {
       initialLocation: '/',
       redirect: _handleRedirect,
       routes: [
-        // --- 1. GRUP: TAB BAR / YAN MENÜ OLAN SAYFALAR (ShellRoute) ---
         StatefulShellRoute.indexedStack(
           builder: (context, state, navigationShell) {
             return _MainWrapper(navigationShell: navigationShell);
           },
-          // ✅ İŞLETİM SİSTEMİNE GÖRE DİNAMİK BRANCH'LER (SEKMELER)
           branches: _buildBranches(),
         ),
-
-        // --- 2. GRUP: TAM EKRAN SAYFALAR ---
         GoRoute(
           path: '/upload_file',
           builder: (context, state) {
@@ -58,19 +57,16 @@ class AppRouter {
             return UploadFilePage(folderId: folderId);
           },
         ),
-
         GoRoute(
           path: '/pdf_viewer',
           builder: (context, state) =>
               PdfViewerPage(file: state.extra as FileItem),
         ),
-
         GoRoute(
           path: '/text_viewer',
           builder: (context, state) =>
               TextViewerPage(file: state.extra as FileItem),
         ),
-
         GoRoute(
           path: '/media_viewer',
           builder: (context, state) =>
@@ -85,14 +81,15 @@ class AppRouter {
     _setupPlatformChannel();
   }
 
-  // ✅ MOBİL VE MASAÜSTÜ İÇİN ROTALARI AYARLAYAN YARDIMCI METOT
   List<StatefulShellBranch> _buildBranches() {
     List<StatefulShellBranch> branches = [
       StatefulShellBranch(
         routes: [
           GoRoute(
             path: '/',
-            builder: (context, state) => const MyStoragePage(),
+            builder: (context, state) => isDesktopOS
+                ? const MyStorageWindowsPage()
+                : const MyStoragePage(),
           ),
         ],
       ),
@@ -104,9 +101,17 @@ class AppRouter {
           ),
         ],
       ),
+      StatefulShellBranch(
+        routes: [
+          GoRoute(
+            path: '/trash',
+            builder: (context, state) =>
+                isDesktopOS ? const TrashWindowsPage() : const MyStoragePage(),
+          ),
+        ],
+      ),
     ];
 
-    // Sadece masaüstü ortamında (Windows/Mac/Web) yükleme ve workspace sayfalarını sekmeye ekle
     if (isDesktopOS) {
       branches.add(
         StatefulShellBranch(
@@ -130,7 +135,6 @@ class AppRouter {
       );
     }
 
-    // Ayarlar sekmesi herkes için sonda olmalı
     branches.add(
       StatefulShellBranch(
         routes: [
@@ -157,21 +161,18 @@ class AppRouter {
 
   Future<bool> _checkPendingShare() async {
     if (isDesktopOS) return false;
-
     try {
       final bool? hasShare = await _platform.invokeMethod('hasPendingShare');
       return hasShare ?? false;
     } on PlatformException {
       return false;
     } catch (e) {
-      debugPrint("Intent kanalı hatası (Yoksayılabilir): $e");
       return false;
     }
   }
 
   void _setupPlatformChannel() {
     if (isDesktopOS) return;
-
     _platform.setMethodCallHandler((call) async {
       if (call.method == "navigateToUpload") {
         router.go('/upload_file');
@@ -181,9 +182,6 @@ class AppRouter {
   }
 }
 
-// ============================================================================
-// 🎯 PLATFORM SEÇİCİ WRAPPER
-// ============================================================================
 class _MainWrapper extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
 
@@ -191,7 +189,6 @@ class _MainWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Mobil cihazda (Örn: Android Tablet) yan çevrilirse Desktop tasarımını gösterir
     final useDesktopLayout =
         isDesktopOS || MediaQuery.of(context).size.width > 800;
 
@@ -203,9 +200,6 @@ class _MainWrapper extends StatelessWidget {
   }
 }
 
-// ============================================================================
-// 🖥️ MASAÜSTÜ (VE BÜYÜK EKRANLI MOBİL) ARAYÜZÜ: Şık Yan Menü
-// ============================================================================
 class _DesktopWrapper extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
 
@@ -218,112 +212,182 @@ class _DesktopWrapper extends StatelessWidget {
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // --- SOL YAN PANEL ---
-          NavigationRail(
-            extended: true,
-            minExtendedWidth: 240,
-            backgroundColor: ThemeColors.sidePanelColor,
-            useIndicator: true,
-            indicatorColor: ThemeColors.primary.withOpacity(0.15),
-            indicatorShape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            leading: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 32, 16, 24),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: ThemeColors.primary.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(10),
+          Container(
+            width: 190,
+            color: ThemeColors.sidePanelColor,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 32, 16, 24),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: ThemeColors.primary.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(
+                          MostromoIcons.cloud,
+                          size: 24,
+                          color: ThemeColors.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      const Text(
+                        "Mostromo",
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                _buildNavItem(
+                  context,
+                  0,
+                  Icons.folder_outlined,
+                  Icons.folder,
+                  'Dosyalarım',
+                ),
+                _buildNavItem(
+                  context,
+                  1,
+                  Icons.search_rounded,
+                  Icons.search_rounded,
+                  'Ara',
+                ),
+                _buildNavItem(
+                  context,
+                  2,
+                  Icons.delete_outline_rounded,
+                  Icons.delete_rounded,
+                  'Geri Dönüşüm',
+                ),
+
+                const Spacer(),
+
+                if (isDesktopOS) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      left: 20,
+                      bottom: 8,
+                      top: 16,
                     ),
-                    child: Icon(
-                      MostromoIcons.cloud,
-                      size: 28,
-                      color: ThemeColors.primary,
+                    child: Text(
+                      "SİSTEM",
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: ThemeColors.captionText.withOpacity(0.6),
+                        letterSpacing: 1.2,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  const Text(
-                    "Mostromo",
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
-                    ),
+                  _buildNavItem(
+                    context,
+                    4,
+                    Icons.business_center_outlined,
+                    Icons.business_center,
+                    'Workspaces',
+                  ),
+                  _buildNavItem(
+                    context,
+                    3,
+                    Icons.cloud_upload_outlined,
+                    Icons.cloud_upload,
+                    'Yükle',
                   ),
                 ],
-              ),
-            ),
-            selectedLabelTextStyle: TextStyle(
-              color: ThemeColors.primary,
-              fontWeight: FontWeight.bold,
-              fontSize: 14,
-            ),
-            unselectedLabelTextStyle: const TextStyle(
-              color: Colors.grey,
-              fontWeight: FontWeight.w500,
-              fontSize: 14,
-            ),
-            selectedIconTheme: IconThemeData(
-              color: ThemeColors.primary,
-              size: 24,
-            ),
-            unselectedIconTheme: const IconThemeData(
-              color: Colors.grey,
-              size: 24,
-            ),
-            selectedIndex: navigationShell.currentIndex,
-            onDestinationSelected: (index) {
-              if (index == navigationShell.currentIndex) {
-                context.read<NavEventProvider>().notifyDoubleTap(index);
-              } else {
-                navigationShell.goBranch(index);
-              }
-            },
-            // ✅ DİNAMİK MENÜ ÖĞELERİ
-            destinations: [
-              const NavigationRailDestination(
-                icon: Icon(Icons.folder_outlined),
-                selectedIcon: Icon(Icons.folder),
-                label: Text('Dosyalarım'),
-              ),
-              const NavigationRailDestination(
-                icon: Icon(Icons.search_rounded),
-                selectedIcon: Icon(Icons.search_rounded),
-                label: Text('Ara'),
-              ),
-              if (isDesktopOS)
-                const NavigationRailDestination(
-                  icon: Icon(Icons.cloud_upload_outlined),
-                  selectedIcon: Icon(Icons.cloud_upload),
-                  label: Text('Yükle'),
+
+                _buildNavItem(
+                  context,
+                  isDesktopOS ? 5 : 3,
+                  Icons.settings_outlined,
+                  Icons.settings,
+                  'Ayarlar',
                 ),
-              if (isDesktopOS)
-                const NavigationRailDestination(
-                  icon: Icon(Icons.business_center_outlined),
-                  selectedIcon: Icon(Icons.business_center),
-                  label: Text('Workspaces'),
-                ),
-              const NavigationRailDestination(
-                icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings),
-                label: Text('Ayarlar'),
-              ),
-            ],
+
+                const SizedBox(height: 16),
+              ],
+            ),
           ),
+
           Container(width: 1, color: Colors.grey.withOpacity(0.15)),
           Expanded(child: ClipRRect(child: navigationShell)),
         ],
       ),
     );
   }
+
+  Widget _buildNavItem(
+    BuildContext context,
+    int index,
+    IconData icon,
+    IconData selectedIcon,
+    String label,
+  ) {
+    final bool isSelected = navigationShell.currentIndex == index;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          hoverColor: ThemeColors.primary.withOpacity(0.05),
+          // 🌟 GÜNCELLENDİ: SEKMEYE GEÇERKEN SEÇİMİ TEMİZLE!
+          onTap: () {
+            if (index == navigationShell.currentIndex) {
+              context.read<NavEventProvider>().notifyDoubleTap(index);
+            } else {
+              context.read<StorageViewModel>().clearSelection(); // 🌟 ÖNEMLİ
+              context.read<StorageViewModel>().closeInfoPanel(); // 🌟 ÖNEMLİ
+              navigationShell.goBranch(index);
+            }
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? ThemeColors.primary.withOpacity(0.15)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  isSelected ? selectedIcon : icon,
+                  size: 20,
+                  color: isSelected
+                      ? ThemeColors.primary
+                      : ThemeColors.captionText,
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    color: isSelected
+                        ? ThemeColors.primary
+                        : ThemeColors.titleText.withOpacity(0.8),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-// ============================================================================
-// 📱 MOBİL ARAYÜZ: Gizlenebilir Alt Bar
-// ============================================================================
 class _MobileWrapper extends StatefulWidget {
   final StatefulNavigationShell navigationShell;
 
@@ -389,14 +453,16 @@ class _MobileWrapperState extends State<_MobileWrapper> {
                 backgroundColor: ThemeColors.background,
                 indicatorColor: ThemeColors.primary.withOpacity(0.5),
                 selectedIndex: widget.navigationShell.currentIndex,
+                // 🌟 GÜNCELLENDİ: MOBİLDE SEKMEYE GEÇERKEN SEÇİMİ TEMİZLE!
                 onDestinationSelected: (index) {
                   if (index == widget.navigationShell.currentIndex) {
                     context.read<NavEventProvider>().notifyDoubleTap(index);
                   } else {
+                    context.read<StorageViewModel>().clearSelection();
+                    context.read<StorageViewModel>().closeInfoPanel();
                     widget.navigationShell.goBranch(index);
                   }
                 },
-                // ✅ DİNAMİK MENÜ ÖĞELERİ (Sadece Mobil Uyumlu Olanlar)
                 destinations: [
                   const NavigationDestination(
                     icon: Icon(Icons.folder_outlined),
@@ -407,6 +473,11 @@ class _MobileWrapperState extends State<_MobileWrapper> {
                     icon: Icon(Icons.search),
                     selectedIcon: Icon(Icons.search),
                     label: 'Ara',
+                  ),
+                  const NavigationDestination(
+                    icon: Icon(Icons.delete_outline),
+                    selectedIcon: Icon(Icons.delete),
+                    label: 'Çöp Kutusu',
                   ),
                   if (isDesktopOS)
                     const NavigationDestination(
