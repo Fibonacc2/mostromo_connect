@@ -1,16 +1,21 @@
+// lib/main.dart
+
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart'; // kIsWeb kontrolü için
+import 'package:flutter/foundation.dart';
 import 'package:mostromo_connect/features/storage/services/local_bridge_service.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
+import 'package:app_links/app_links.dart';
+import 'package:windows_single_instance/windows_single_instance.dart'; // 🌟 YENİ PAKET
 
 // Ortak paketlerden gelenler
 import 'package:common_ui/data/themes.dart';
 import 'package:shared_core/data/notifiers.dart';
 
-// 🌟 YENİ: Masaüstü Pencere ve Görev Çubuğu Yöneticileri
+// Masaüstü Pencere ve Görev Çubuğu Yöneticileri
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 
@@ -18,19 +23,86 @@ import 'package:tray_manager/tray_manager.dart';
 import 'core/app_router.dart';
 import 'core/nav_event_provider.dart';
 import 'features/storage/viewmodels/storage_view_model.dart';
+import 'core/auth_view_model.dart';
 
-void main() async {
+// ==========================================================
+// 🌟 WINDOWS İÇİN REGISTRY (KAYIT DEFTERİ) PROTOKOL YAZICI
+// ==========================================================
+void _registerWindowsProtocol() {
+  if (!Platform.isWindows) return;
+  try {
+    final executable = Platform.resolvedExecutable;
+    // Windows'a mostromo:// linklerinin bu exe'ye ait olduğunu öğretir
+    Process.runSync('reg', [
+      'add',
+      'HKCU\\Software\\Classes\\mostromo',
+      '/ve',
+      '/d',
+      'URL:mostromo Protocol',
+      '/f',
+    ]);
+    Process.runSync('reg', [
+      'add',
+      'HKCU\\Software\\Classes\\mostromo',
+      '/v',
+      'URL Protocol',
+      '/d',
+      '',
+      '/f',
+    ]);
+    Process.runSync('reg', [
+      'add',
+      'HKCU\\Software\\Classes\\mostromo\\shell\\open\\command',
+      '/ve',
+      '/d',
+      '"$executable" "%1"',
+      '/f',
+    ]);
+  } catch (e) {
+    debugPrint("Windows protokol kaydı hatası: $e");
+  }
+}
+
+// 🌟 DİKKAT: main() fonksiyonuna "args" parametresi eklendi
+void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ✅ VİEWMODEL'İ ÖNCEDEN OLUŞTURUYORUZ
+  final authViewModel = AuthViewModel();
   final storageViewModel = StorageViewModel();
+  final appRouter = AppRouter(authViewModel);
 
-  // --- MASAÜSTÜ (WINDOWS) AYARLARI VE YEREL SUNUCU ---
+  // --- MASAÜSTÜ (WINDOWS) AYARLARI ---
   if (!kIsWeb && Platform.isWindows) {
     await windowManager.ensureInitialized();
 
+    // 1. Windows Kayıt Defterine Protokolü Ekle
+    _registerWindowsProtocol();
+
+    // 2. Çoklu Pencereyi Engelle ve Linki Yakala
+    await WindowsSingleInstance.ensureSingleInstance(
+      args,
+      "mostromo_connect_instance",
+      onSecondWindow: (newArgs) {
+        // Zaten uygulama açıkken, tarayıcıdan linke basılıp ikinci bir kopya açılmak istendiğinde:
+        if (newArgs.isNotEmpty) {
+          final link = newArgs.first;
+          final uri = Uri.tryParse(link);
+          if (uri != null && uri.scheme == 'mostromo' && uri.host == 'shared') {
+            final token = uri.queryParameters['t'];
+            if (token != null) {
+              // Gelen linki mevcut uygulamanın Router'ına fırlat
+              appRouter.router.push('/shared_preview?token=$token');
+            }
+          }
+        }
+        // Mevcut pencereyi yanıp sönerek öne getir
+        windowManager.show();
+        windowManager.focus();
+      },
+    );
+
     WindowOptions windowOptions = const WindowOptions(
-      size: Size(1200, 800), // Başlangıç boyutu
+      size: Size(1200, 800),
       minimumSize: Size(800, 600),
       center: true,
       backgroundColor: Colors.transparent,
@@ -41,12 +113,9 @@ void main() async {
     windowManager.waitUntilReadyToShow(windowOptions, () async {
       await windowManager.show();
       await windowManager.focus();
-
-      // 🌟 SİHİRLİ DOKUNUŞ: Çarpıya (X) basıldığında uygulamanın kapanmasını engelle!
       await windowManager.setPreventClose(true);
     });
 
-    // Local Bridge'i başlat (VS Code'u dinleyen arka plan servisi)
     final localBridgeServer = LocalBridgeServer(
       storageViewModel: storageViewModel,
     );
@@ -58,51 +127,89 @@ void main() async {
     await FlutterDownloader.initialize(debug: true);
   }
 
-  // Tema yükleme (Ortak)
   await loadSelectedTheme();
   initThemeListener();
 
   runApp(
     MultiProvider(
       providers: [
+        ChangeNotifierProvider.value(value: authViewModel),
         ChangeNotifierProvider.value(value: storageViewModel),
         ChangeNotifierProvider(create: (_) => NavEventProvider()),
       ],
-      child: const MyApp(),
+      child: MyApp(appRouter: appRouter),
     ),
   );
 }
 
-// 🌟 WIDGET'I STATEFUL YAPIYORUZ (Tray ve Window dinleyicileri için)
 class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+  final AppRouter appRouter;
+
+  const MyApp({super.key, required this.appRouter});
 
   @override
   State<MyApp> createState() => _MyAppState();
 }
 
-// WindowListener ve TrayListener (Mixins) ekleniyor
 class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
-  // Masaüstü platform kontrolü için güvenli bir getter
+  late AppLinks _appLinks;
+  StreamSubscription<Uri>? _linkSubscription;
+
   bool get _isDesktop {
-    if (kIsWeb) return false; // Web ise false
+    if (kIsWeb) return false;
     return Platform.isWindows || Platform.isMacOS || Platform.isLinux;
   }
 
   @override
   void initState() {
     super.initState();
-    // 🌟 SADECE WINDOWS'TA DİNLEYİCİLERİ AKTİF ET (Android'i korur)
     if (_isDesktop) {
       windowManager.addListener(this);
       trayManager.addListener(this);
       _initSystemTray();
     }
+
+    // Uygulama içi Deep Link Dinleyicisini Başlat
+    _initDeepLinks();
+  }
+
+  // ==========================================================
+  // 🔗 DEEP LINK (PAYLAŞIM LİNKİ) DİNLEYİCİSİ (Android / iOS / İlk Açılış)
+  // ==========================================================
+  void _initDeepLinks() {
+    _appLinks = AppLinks();
+
+    // 1. Uygulama tamamen kapalıyken dışarıdan linke tıklanarak açıldıysa:
+    _appLinks.getInitialLink().then((Uri? uri) {
+      if (uri != null) _handleIncomingLink(uri);
+    });
+
+    // 2. Uygulama zaten açıkken (Android/iOS) linke tıklandıysa:
+    _linkSubscription = _appLinks.uriLinkStream.listen((uri) {
+      _handleIncomingLink(uri);
+    });
+  }
+
+  void _handleIncomingLink(Uri uri) {
+    if (uri.scheme == 'mostromo' && uri.host == 'shared') {
+      final token = uri.queryParameters['t'];
+      if (token != null && token.isNotEmpty) {
+        debugPrint("🔗 Paylaşılan dosya linki algılandı! Token: $token");
+
+        if (_isDesktop) {
+          windowManager.show();
+          windowManager.focus();
+        }
+
+        // Kullanıcıyı önizleme sayfasına fırlat
+        widget.appRouter.router.push('/shared_preview?token=$token');
+      }
+    }
   }
 
   @override
   void dispose() {
-    // 🌟 SADECE WINDOWS'TA DİNLEYİCİLERİ KALDIR
+    _linkSubscription?.cancel();
     if (_isDesktop) {
       windowManager.removeListener(this);
       trayManager.removeListener(this);
@@ -110,15 +217,9 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
     super.dispose();
   }
 
-  // ==========================================================
-  // 🌟 SYSTEM TRAY (GÖREV ÇUBUĞU) KURULUMU
-  // ==========================================================
   Future<void> _initSystemTray() async {
-    // Windows için uygulamanın assets klasöründe app_icon.ico olmalı
     await trayManager.setIcon('assets/app_icon.ico');
-
     await trayManager.setToolTip('Mostromo Connect');
-
     Menu menu = Menu(
       items: [
         MenuItem(key: 'show_app', label: 'Mostromo\'yu Aç'),
@@ -129,32 +230,22 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
     await trayManager.setContextMenu(menu);
   }
 
-  // ==========================================================
-  // 🌟 PENCERE OLAYLARI
-  // ==========================================================
   @override
   void onWindowClose() async {
-    // Çarpıya (X) basıldığında tetiklenir
     bool isPreventClose = await windowManager.isPreventClose();
     if (isPreventClose) {
-      // Uygulamayı kapatma, sadece görünmez yap! (Arkada çalışmaya devam eder)
       windowManager.hide();
     }
   }
 
-  // ==========================================================
-  // 🌟 TRAY (SAĞ ALT İKON) OLAYLARI
-  // ==========================================================
   @override
   void onTrayIconMouseDown() {
-    // Sağ alttaki ikona sol tıklandığında pencereyi geri getir
     windowManager.show();
     windowManager.focus();
   }
 
   @override
   void onTrayIconRightMouseDown() {
-    // İkona sağ tıklandığında menüyü aç
     trayManager.popUpContextMenu();
   }
 
@@ -164,7 +255,6 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
       windowManager.show();
       windowManager.focus();
     } else if (menuItem.key == 'exit_app') {
-      // "Tamamen Çıkış Yap" denirse zorla kapat
       windowManager.destroy();
     }
   }
@@ -174,27 +264,22 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
     return ValueListenableBuilder<int>(
       valueListenable: selectedTheme,
       builder: (context, themeId, _) {
-        // Geçerli temayı seçiyoruz
         ThemeData baseTheme =
             appThemes[themeId.clamp(0, appThemes.length - 1)].data;
 
-        // EĞER MASAÜSTÜ/WINDOWS İSE: Android tıklama efektini tamamen yok et
         if (_isDesktop) {
           baseTheme = baseTheme.copyWith(
-            splashFactory:
-                NoSplash.splashFactory, // Dalgalanmayı (ripple) kapatır
-            splashColor: Colors.transparent, // Tıklama sıçrama rengi şeffaf
-            highlightColor: Colors.transparent, // Basılı tutma rengi şeffaf
-            hoverColor: Colors.grey.withOpacity(
-              0.05,
-            ), // Çok hafif, zarif fare üzeri efekti
+            splashFactory: NoSplash.splashFactory,
+            splashColor: Colors.transparent,
+            highlightColor: Colors.transparent,
+            hoverColor: Colors.grey.withValues(alpha: 0.05),
           );
         }
 
         baseTheme = baseTheme.copyWith(
-          textTheme: baseTheme.textTheme.apply(fontFamily: 'Montserrat'),
+          textTheme: baseTheme.textTheme.apply(fontFamily: 'Inter'),
           primaryTextTheme: baseTheme.primaryTextTheme.apply(
-            fontFamily: 'Montserrat',
+            fontFamily: 'Inter',
           ),
         );
 
@@ -202,7 +287,7 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
           debugShowCheckedModeBanner: false,
           title: 'Mostromo Connect',
           theme: baseTheme,
-          routerConfig: AppRouter().router,
+          routerConfig: widget.appRouter.router,
           locale: const Locale('tr'),
           supportedLocales: const [Locale('tr', ''), Locale('en', '')],
           localizationsDelegates: const [

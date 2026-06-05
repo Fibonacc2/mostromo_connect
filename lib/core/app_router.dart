@@ -9,11 +9,17 @@ import 'package:go_router/go_router.dart';
 // ORTAK (Common & Shared)
 import 'package:common_ui/data/theme_colors.dart';
 import 'package:mostromo_connect/core/nav_event_provider.dart';
+import 'package:mostromo_connect/features/storage/mobile/trash_mobile_page.dart';
+import 'package:mostromo_connect/features/storage/shared_preview_page.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_core/models/file_model.dart';
 import 'package:mostromo_icons/mostromo_icons.dart';
 
-import '../features/storage/viewmodels/storage_view_model.dart'; // 🌟 YENİ EKLENDİ (clearSelection için)
+import '../features/storage/viewmodels/storage_view_model.dart';
+
+// 🌟 GÜVENLİK VE GİRİŞ (YENİ EKLENDİ)
+import '../features/auth/login_page.dart';
+import 'auth_view_model.dart';
 
 // SAYFALAR
 import '../features/storage/my_storage_page.dart';
@@ -35,21 +41,39 @@ final bool isDesktopOS =
 
 class AppRouter {
   late final GoRouter router;
+  final AuthViewModel authViewModel; // 🌟 YENİ: Router artık yetkiyi biliyor
+
   static const MethodChannel _platform = MethodChannel(
     'mostromo_connect/shareFile',
   );
 
-  AppRouter() {
+  // 🌟 YENİ: Constructor'a authViewModel eklendi
+  AppRouter(this.authViewModel) {
     router = GoRouter(
       initialLocation: '/',
+      refreshListenable:
+          authViewModel, // 🌟 ÇOK KRİTİK: Giriş/Çıkış yapıldığında rotayı yeniler
       redirect: _handleRedirect,
       routes: [
+        // 🌟 YENİ: Giriş Yap Sayfası Rotası
+        GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
+        GoRoute(
+          path: '/shared_preview',
+          builder: (context, state) {
+            final token = state.uri.queryParameters['token'] ?? '';
+            return SharedPreviewPage(token: token);
+          },
+        ),
+
+        // ANA SEKMELİ YAPI
         StatefulShellRoute.indexedStack(
           builder: (context, state, navigationShell) {
             return _MainWrapper(navigationShell: navigationShell);
           },
           branches: _buildBranches(),
         ),
+
+        // TAM EKRAN SAYFALAR
         GoRoute(
           path: '/upload_file',
           builder: (context, state) {
@@ -105,8 +129,9 @@ class AppRouter {
         routes: [
           GoRoute(
             path: '/trash',
-            builder: (context, state) =>
-                isDesktopOS ? const TrashWindowsPage() : const MyStoragePage(),
+            builder: (context, state) => isDesktopOS
+                ? const TrashWindowsPage()
+                : const TrashMobilePage(),
           ),
         ],
       ),
@@ -149,13 +174,33 @@ class AppRouter {
     return branches;
   }
 
+  // 🌟 GÜNCELLENDİ: GÜVENLİK DUVARI (AUTH GUARD) MANTIĞI
   Future<String?> _handleRedirect(
     BuildContext context,
     GoRouterState state,
   ) async {
+    final isLoggedIn = authViewModel.isLoggedIn;
+    final isGoingToLogin = state.uri.path == '/login';
+
+    // 1. Uygulama ilk açıldığında hafıza (Beni Hatırla) kontrol ediliyorsa bekle
+    if (authViewModel.isLoading) return null;
+
+    // 2. GİRİŞ YAPMAMIŞSA ve login sayfasına gitmiyorsa -> Zorla Login'e gönder
+    if (!isLoggedIn && !isGoingToLogin) {
+      return '/login';
+    }
+
+    // 3. GİRİŞ YAPMIŞSA ve login sayfasındaysa -> Ana Sayfaya gönder
+    if (isLoggedIn && isGoingToLogin) {
+      return '/';
+    }
+
+    // Dosya paylaşım (Intent) kontrolü
     if (state.uri.path == '/upload_file') return null;
     final hasShare = await _checkPendingShare();
-    if (hasShare) return '/upload_file';
+    if (hasShare && isLoggedIn)
+      return '/upload_file'; // Sadece giriş yaptıysa upload'a at
+
     return null;
   }
 
@@ -182,6 +227,9 @@ class AppRouter {
   }
 }
 
+// ============================================================================
+// 🎯 PLATFORM SEÇİCİ WRAPPER
+// ============================================================================
 class _MainWrapper extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
 
@@ -200,6 +248,9 @@ class _MainWrapper extends StatelessWidget {
   }
 }
 
+// ============================================================================
+// 🖥️ MASAÜSTÜ ARAYÜZÜ: Windows Explorer / MacOS Tarzı Yan Menü
+// ============================================================================
 class _DesktopWrapper extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
 
@@ -340,13 +391,12 @@ class _DesktopWrapper extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
           hoverColor: ThemeColors.primary.withOpacity(0.05),
-          // 🌟 GÜNCELLENDİ: SEKMEYE GEÇERKEN SEÇİMİ TEMİZLE!
           onTap: () {
             if (index == navigationShell.currentIndex) {
               context.read<NavEventProvider>().notifyDoubleTap(index);
             } else {
-              context.read<StorageViewModel>().clearSelection(); // 🌟 ÖNEMLİ
-              context.read<StorageViewModel>().closeInfoPanel(); // 🌟 ÖNEMLİ
+              context.read<StorageViewModel>().clearSelection();
+              context.read<StorageViewModel>().closeInfoPanel();
               navigationShell.goBranch(index);
             }
           },
@@ -388,6 +438,9 @@ class _DesktopWrapper extends StatelessWidget {
   }
 }
 
+// ============================================================================
+// 📱 MOBİL ARAYÜZ: Gizlenebilir Alt Bar
+// ============================================================================
 class _MobileWrapper extends StatefulWidget {
   final StatefulNavigationShell navigationShell;
 
@@ -453,7 +506,6 @@ class _MobileWrapperState extends State<_MobileWrapper> {
                 backgroundColor: ThemeColors.background,
                 indicatorColor: ThemeColors.primary.withOpacity(0.5),
                 selectedIndex: widget.navigationShell.currentIndex,
-                // 🌟 GÜNCELLENDİ: MOBİLDE SEKMEYE GEÇERKEN SEÇİMİ TEMİZLE!
                 onDestinationSelected: (index) {
                   if (index == widget.navigationShell.currentIndex) {
                     context.read<NavEventProvider>().notifyDoubleTap(index);
@@ -477,7 +529,7 @@ class _MobileWrapperState extends State<_MobileWrapper> {
                   const NavigationDestination(
                     icon: Icon(Icons.delete_outline),
                     selectedIcon: Icon(Icons.delete),
-                    label: 'Çöp Kutusu',
+                    label: 'Geri Dönüşüm',
                   ),
                   if (isDesktopOS)
                     const NavigationDestination(

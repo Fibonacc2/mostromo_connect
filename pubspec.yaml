@@ -37,6 +37,8 @@ dependencies:
   screen_retriever:
   desktop_drop: ^0.7.1
   tray_manager: ^0.5.2
+  app_links: ^6.4.1
+  windows_single_instance: ^1.1.0
 
 dev_dependencies:
   flutter_test:
@@ -48,19 +50,25 @@ flutter:
   assets:
     - assets/app_icon.ico
   # Sadece tek dosyayı tanımlıyoruz
-fonts:
-  - family: Inter
-    fonts:
-      - asset: assets/fonts/Inter-VariableFont_opsz_wght.ttf
-  - family: Nunito
-    fonts:
-      - asset: assets/fonts/Nunito-VariableFont_wght.ttf
-  - family: Poppins
-    fonts:
-      - asset: assets/fonts/Poppins-Regular.ttf
-  - family: OpenSans
-    fonts:
-      - asset: assets/fonts/OpenSans-VariableFont_wdth_wght.ttf
-  - family: Montserrat
-    fonts:
-      - asset: assets/fonts/Montserrat.ttf
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-VariableFont_opsz_wght.ttf
+    - family: Nunito
+      fonts:
+        - asset: assets/fonts/Nunito-VariableFont_wght.ttf
+    - family: Poppins
+      fonts:
+        - asset: assets/fonts/Poppins-Regular.ttf
+    - family: OpenSans
+      fonts:
+        - asset: assets/fonts/OpenSans-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/OpenSans-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/OpenSans-Bold.ttf
+          weight: 700
+
+    - family: Montserrat
+      fonts:
+        - asset: assets/fonts/Montserrat.ttf
