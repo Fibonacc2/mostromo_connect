@@ -1,6 +1,7 @@
 // apps/mostromo_connect/lib/core/app_router.dart
 
 import 'dart:io';
+import 'dart:ui'; // 🌟 YENİ: Menüdeki cam efekti (Blur) için eklendi
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import 'package:common_ui/data/theme_colors.dart';
 import 'package:mostromo_connect/core/nav_event_provider.dart';
 import 'package:mostromo_connect/features/storage/mobile/trash_mobile_page.dart';
+import 'package:mostromo_connect/features/storage/shared_links_page.dart';
 import 'package:mostromo_connect/features/storage/shared_preview_page.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_core/models/file_model.dart';
@@ -17,7 +19,7 @@ import 'package:mostromo_icons/mostromo_icons.dart';
 
 import '../features/storage/viewmodels/storage_view_model.dart';
 
-// 🌟 GÜVENLİK VE GİRİŞ (YENİ EKLENDİ)
+// GÜVENLİK VE GİRİŞ
 import '../features/auth/login_page.dart';
 import 'auth_view_model.dart';
 
@@ -41,21 +43,18 @@ final bool isDesktopOS =
 
 class AppRouter {
   late final GoRouter router;
-  final AuthViewModel authViewModel; // 🌟 YENİ: Router artık yetkiyi biliyor
+  final AuthViewModel authViewModel;
 
   static const MethodChannel _platform = MethodChannel(
     'mostromo_connect/shareFile',
   );
 
-  // 🌟 YENİ: Constructor'a authViewModel eklendi
   AppRouter(this.authViewModel) {
     router = GoRouter(
       initialLocation: '/',
-      refreshListenable:
-          authViewModel, // 🌟 ÇOK KRİTİK: Giriş/Çıkış yapıldığında rotayı yeniler
+      refreshListenable: authViewModel,
       redirect: _handleRedirect,
       routes: [
-        // 🌟 YENİ: Giriş Yap Sayfası Rotası
         GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
         GoRoute(
           path: '/shared_preview',
@@ -135,6 +134,14 @@ class AppRouter {
           ),
         ],
       ),
+      StatefulShellBranch(
+        routes: [
+          GoRoute(
+            path: '/shared_links',
+            builder: (context, state) => const SharedLinksPage(),
+          ),
+        ],
+      ),
     ];
 
     if (isDesktopOS) {
@@ -147,7 +154,7 @@ class AppRouter {
             ),
           ],
         ),
-      );
+      ); // İndex: 4
       branches.add(
         StatefulShellBranch(
           routes: [
@@ -157,7 +164,7 @@ class AppRouter {
             ),
           ],
         ),
-      );
+      ); // İndex: 5
     }
 
     branches.add(
@@ -169,12 +176,11 @@ class AppRouter {
           ),
         ],
       ),
-    );
+    ); // İndex: Masaüstü için 6, Mobil için 4
 
     return branches;
   }
 
-  // 🌟 GÜNCELLENDİ: GÜVENLİK DUVARI (AUTH GUARD) MANTIĞI
   Future<String?> _handleRedirect(
     BuildContext context,
     GoRouterState state,
@@ -182,24 +188,19 @@ class AppRouter {
     final isLoggedIn = authViewModel.isLoggedIn;
     final isGoingToLogin = state.uri.path == '/login';
 
-    // 1. Uygulama ilk açıldığında hafıza (Beni Hatırla) kontrol ediliyorsa bekle
     if (authViewModel.isLoading) return null;
 
-    // 2. GİRİŞ YAPMAMIŞSA ve login sayfasına gitmiyorsa -> Zorla Login'e gönder
     if (!isLoggedIn && !isGoingToLogin) {
       return '/login';
     }
 
-    // 3. GİRİŞ YAPMIŞSA ve login sayfasındaysa -> Ana Sayfaya gönder
     if (isLoggedIn && isGoingToLogin) {
       return '/';
     }
 
-    // Dosya paylaşım (Intent) kontrolü
     if (state.uri.path == '/upload_file') return null;
     final hasShare = await _checkPendingShare();
-    if (hasShare && isLoggedIn)
-      return '/upload_file'; // Sadece giriş yaptıysa upload'a at
+    if (hasShare && isLoggedIn) return '/upload_file';
 
     return null;
   }
@@ -319,6 +320,13 @@ class _DesktopWrapper extends StatelessWidget {
                   Icons.delete_rounded,
                   'Geri Dönüşüm',
                 ),
+                _buildNavItem(
+                  context,
+                  3,
+                  Icons.podcasts_rounded,
+                  Icons.podcasts_rounded,
+                  'Paylaşılanlar',
+                ),
 
                 const Spacer(),
 
@@ -341,14 +349,14 @@ class _DesktopWrapper extends StatelessWidget {
                   ),
                   _buildNavItem(
                     context,
-                    4,
+                    5,
                     Icons.business_center_outlined,
                     Icons.business_center,
                     'Workspaces',
                   ),
                   _buildNavItem(
                     context,
-                    3,
+                    4,
                     Icons.cloud_upload_outlined,
                     Icons.cloud_upload,
                     'Yükle',
@@ -357,7 +365,7 @@ class _DesktopWrapper extends StatelessWidget {
 
                 _buildNavItem(
                   context,
-                  isDesktopOS ? 5 : 3,
+                  isDesktopOS ? 6 : 4,
                   Icons.settings_outlined,
                   Icons.settings,
                   'Ayarlar',
@@ -439,7 +447,7 @@ class _DesktopWrapper extends StatelessWidget {
 }
 
 // ============================================================================
-// 📱 MOBİL ARAYÜZ: Gizlenebilir Alt Bar
+// 📱 MOBİL ARAYÜZ: Temizlenmiş ve Ferah Navigasyon Çubuğu
 // ============================================================================
 class _MobileWrapper extends StatefulWidget {
   final StatefulNavigationShell navigationShell;
@@ -454,6 +462,122 @@ class _MobileWrapperState extends State<_MobileWrapper> {
   bool _isVisible = true;
   double _scrollUpDistance = 0.0;
 
+  // 🌟 GÜNCELLEME: Çöp Kutusu ve Ayarlar Navbar'dan kalktığı için
+  // arka plandaki index'leri Navigasyon çubuğuna uygun hale getiren mantık
+  int _getBottomBarIndex(int branchIndex) {
+    if (branchIndex == 0) return 0; // Dosyalar
+    if (branchIndex == 1) return 1; // Ara
+    if (branchIndex == 3) return 2; // Paylaşılanlar
+    if (branchIndex == 2 || branchIndex == 4) return 3; // Menü (Ayarlar & Çöp)
+    return 0;
+  }
+
+  // 🌟 YENİ EKLENTİ: Navbardan çağrılan özel ve şık Menü (Ayarlar & Çöp Kutusu için)
+  void _showMobileMenu(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            decoration: BoxDecoration(
+              color: ThemeColors.floatingPanelColor,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(32),
+              ),
+              border: Border(
+                top: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Tutma Çubuğu (Drag Handle)
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: ThemeColors.captionText.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Geri Dönüşüm Kutusu Menüsü
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.orangeAccent.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.delete_outline_rounded,
+                      color: Colors.orangeAccent,
+                    ),
+                  ),
+                  title: Text(
+                    "Geri Dönüşüm Kutusu",
+                    style: TextStyle(
+                      color: ThemeColors.titleText,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  trailing: Icon(
+                    Icons.arrow_forward_ios_rounded,
+                    size: 14,
+                    color: ThemeColors.captionText,
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    widget.navigationShell.goBranch(2);
+                  },
+                ),
+                const SizedBox(height: 8),
+
+                // Ayarlar Menüsü
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: ThemeColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      Icons.settings_outlined,
+                      color: ThemeColors.primary,
+                    ),
+                  ),
+                  title: Text(
+                    "Ayarlar",
+                    style: TextStyle(
+                      color: ThemeColors.titleText,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  trailing: Icon(
+                    Icons.arrow_forward_ios_rounded,
+                    size: 14,
+                    color: ThemeColors.captionText,
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    widget.navigationShell.goBranch(
+                      4,
+                    ); // Mobilde Ayarlar'ın İndeksi 4'tür
+                  },
+                ),
+                const SizedBox(height: 24),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool isStoragePage = widget.navigationShell.currentIndex == 0;
@@ -465,12 +589,10 @@ class _MobileWrapperState extends State<_MobileWrapper> {
     return Scaffold(
       body: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
-          if (!isStoragePage || notification is! ScrollUpdateNotification) {
+          if (!isStoragePage || notification is! ScrollUpdateNotification)
             return false;
-          }
 
           final double delta = notification.scrollDelta ?? 0.0;
-
           if (delta > 0) {
             _scrollUpDistance += delta.abs();
             if (_isVisible && _scrollUpDistance > 100.0) {
@@ -504,49 +626,54 @@ class _MobileWrapperState extends State<_MobileWrapper> {
               offset: shouldShowBar ? Offset.zero : const Offset(0, 1.0),
               child: NavigationBar(
                 backgroundColor: ThemeColors.background,
-                indicatorColor: ThemeColors.primary.withOpacity(0.5),
-                selectedIndex: widget.navigationShell.currentIndex,
+                indicatorColor: ThemeColors.primary.withValues(alpha: 0.15),
+                selectedIndex: _getBottomBarIndex(
+                  widget.navigationShell.currentIndex,
+                ),
                 onDestinationSelected: (index) {
-                  if (index == widget.navigationShell.currentIndex) {
-                    context.read<NavEventProvider>().notifyDoubleTap(index);
+                  // 🌟 EĞER MENÜ BUTONUNA (İndex: 3) BASILDIYSA
+                  if (index == 3) {
+                    _showMobileMenu(context);
+                    return;
+                  }
+
+                  // Diğer Sekmelerin Seçimi
+                  int targetBranch = 0;
+                  if (index == 0) targetBranch = 0; // Dosyalarım
+                  if (index == 1) targetBranch = 1; // Ara
+                  if (index == 2) targetBranch = 3; // Paylaşılanlar
+
+                  if (targetBranch == widget.navigationShell.currentIndex) {
+                    context.read<NavEventProvider>().notifyDoubleTap(
+                      targetBranch,
+                    );
                   } else {
                     context.read<StorageViewModel>().clearSelection();
                     context.read<StorageViewModel>().closeInfoPanel();
-                    widget.navigationShell.goBranch(index);
+                    widget.navigationShell.goBranch(targetBranch);
                   }
                 },
-                destinations: [
-                  const NavigationDestination(
+                // 🌟 TERTEMİZ YENİ MOBİL MENÜ LİSTESİ (SADECE 4 ÖĞE)
+                destinations: const [
+                  NavigationDestination(
                     icon: Icon(Icons.folder_outlined),
                     selectedIcon: Icon(Icons.folder),
-                    label: 'Dosyalarım',
+                    label: 'Dosyalar',
                   ),
-                  const NavigationDestination(
+                  NavigationDestination(
                     icon: Icon(Icons.search),
                     selectedIcon: Icon(Icons.search),
                     label: 'Ara',
                   ),
-                  const NavigationDestination(
-                    icon: Icon(Icons.delete_outline),
-                    selectedIcon: Icon(Icons.delete),
-                    label: 'Geri Dönüşüm',
+                  NavigationDestination(
+                    icon: Icon(Icons.podcasts_rounded),
+                    selectedIcon: Icon(Icons.podcasts_rounded),
+                    label: 'Paylaşılan',
                   ),
-                  if (isDesktopOS)
-                    const NavigationDestination(
-                      icon: Icon(Icons.cloud_upload_outlined),
-                      selectedIcon: Icon(Icons.cloud_upload),
-                      label: 'Yükle',
-                    ),
-                  if (isDesktopOS)
-                    const NavigationDestination(
-                      icon: Icon(Icons.business_center_outlined),
-                      selectedIcon: Icon(Icons.business_center),
-                      label: 'Workspaces',
-                    ),
-                  const NavigationDestination(
-                    icon: Icon(Icons.settings_outlined),
-                    selectedIcon: Icon(Icons.settings),
-                    label: 'Ayarlar',
+                  NavigationDestination(
+                    icon: Icon(Icons.menu_rounded),
+                    selectedIcon: Icon(Icons.menu_open_rounded),
+                    label: 'Menü',
                   ),
                 ],
               ),

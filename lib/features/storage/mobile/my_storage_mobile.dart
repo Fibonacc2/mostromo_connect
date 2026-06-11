@@ -1,5 +1,7 @@
 // lib/features/storage/mobile/my_storage_mobile.dart
 
+import 'dart:ui'; // 🌟 YENİ EKLENDİ (Cam efekti için)
+import 'package:flutter/services.dart'; // 🌟 YENİ EKLENDİ (Kopyalama işlemi için)
 import 'package:common_ui/views/widgets/scaffold.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -33,7 +35,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<NavEventProvider>().addListener(_handleNavEvent);
 
-      // 🌟 Sayfa açılır açılmaz ViewModel'i NORMAL Moda geçiririz
       context.read<StorageViewModel>().setTrashMode(false);
 
       if (context.read<StorageViewModel>().allFolders.isEmpty &&
@@ -150,7 +151,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
   }
 
   Widget _buildContent(BuildContext context, StorageViewModel viewModel) {
-    // 🌟 GÜNCELLENDİ: Hata veren yer activeFiles ve activeFolders ile değiştirildi
     if (viewModel.isLoading &&
         viewModel.activeFiles.isEmpty &&
         viewModel.activeFolders.isEmpty) {
@@ -188,11 +188,10 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
 
   List<dynamic> _buildCombinedList(StorageViewModel viewModel) {
     final List<dynamic> combinedList = [];
-    combinedList.addAll(viewModel.activeFolders); // 🌟 GÜNCELLENDİ
+    combinedList.addAll(viewModel.activeFolders);
 
     final Map<String, List<FileItem>> groupedFiles = {};
     for (var file in viewModel.activeFiles) {
-      // 🌟 GÜNCELLENDİ
       try {
         final date = DateTime.parse(file.createdAt);
         final key = _getGroupKey(date);
@@ -401,12 +400,30 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
   ) {
     if (!viewModel.isSelectionMode) return null;
 
+    final int totalSelected =
+        viewModel.selectedFiles.length + viewModel.selectedFolders.length;
     final bool filesSelected = viewModel.selectedFiles.isNotEmpty;
     final bool foldersSelected = viewModel.selectedFolders.isNotEmpty;
+
     final bool canRename =
         (viewModel.selectedFolders.length == 1) && !filesSelected;
+    final bool canShare =
+        totalSelected ==
+        1; // 🌟 YENİ: Sadece 1 öğe seçiliyken paylaşım yapılabilir
 
     List<Widget> actions = [];
+
+    // 🌟 PAYLAŞ BUTONU
+    if (canShare) {
+      actions.add(
+        _buildBottomActionItem(Icons.podcasts_rounded, 'Paylaş', () {
+          final dynamic item = viewModel.selectedFiles.isNotEmpty
+              ? viewModel.selectedFiles.first
+              : viewModel.selectedFolders.first;
+          _showMobileShareSheet(context, item, viewModel);
+        }),
+      );
+    }
 
     if (canRename) {
       actions.add(
@@ -441,7 +458,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
       actions.add(
         _buildBottomActionItem(
           Icons.delete_outline,
-          'Çöpe At', // 🌟 GÜNCELLENDİ
+          'Çöpe At',
           () => _deleteSelectedItems(context, viewModel),
         ),
       );
@@ -470,9 +487,12 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon),
+            Icon(icon, color: ThemeColors.primary),
             const SizedBox(height: 3),
-            Text(label, style: const TextStyle(fontSize: 12)),
+            Text(
+              label,
+              style: TextStyle(fontSize: 12, color: ThemeColors.primary),
+            ),
           ],
         ),
       ),
@@ -506,6 +526,12 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
               'Aç',
               () => _openFileViewer(context, file),
             ),
+            // 🌟 YENİ PAYLAŞ MENÜSÜ EKLENDİ
+            _buildActionTile(
+              Icons.podcasts_rounded,
+              'Paylaş',
+              () => _showMobileShareSheet(context, file, viewModel),
+            ),
             _buildActionTile(
               Icons.drive_file_rename_outline,
               'Yeniden Adlandır',
@@ -524,7 +550,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
             const Divider(height: 1),
             _buildActionTile(
               Icons.delete_outline,
-              'Çöpe At', // 🌟 GÜNCELLENDİ
+              'Çöpe At',
               () => _deleteFile(context, viewModel, file),
               isDestructive: true,
             ),
@@ -746,7 +772,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     final bool? confirmed = await _showDeleteConfirmation(context);
     if (confirmed != true) return;
     viewModel.toggleFileSelection(file);
-    await viewModel.moveToTrash(); // 🌟 GÜNCELLENDİ
+    await viewModel.moveToTrash();
   }
 
   Future<void> _deleteSelectedItems(
@@ -763,7 +789,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     );
     if (confirmed != true) return;
 
-    await viewModel.moveToTrash(); // 🌟 GÜNCELLENDİ
+    await viewModel.moveToTrash();
   }
 
   Future<void> _downloadSelectedFiles(
@@ -992,5 +1018,451 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     } catch (e) {
       return dateString;
     }
+  }
+
+  // =====================================================================
+  // 🌟 MOBİL İÇİN ÖZEL: KAYARAK AÇILAN PAYLAŞIM PANELİ (BOTTOM SHEET)
+  // =====================================================================
+  void _showMobileShareSheet(
+    BuildContext context,
+    dynamic item,
+    StorageViewModel viewModel,
+  ) {
+    bool isLoading = true;
+    String? currentLink;
+    bool isPasswordEnabled = false;
+    TextEditingController passwordController = TextEditingController();
+    int expireHours = 0;
+
+    void fetchCurrentInfo(StateSetter setState) async {
+      final info = await viewModel.getShareLinkInfo(item);
+      if (info != null) {
+        currentLink = info['share_link'];
+        isPasswordEnabled = info['has_password'] ?? false;
+        if (isPasswordEnabled) passwordController.text = info['password'] ?? '';
+      }
+      setState(() => isLoading = false);
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: ThemeColors.background.withValues(alpha: 0.7),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            if (isLoading) fetchCurrentInfo(setState);
+
+            final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+            return BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
+              child: Container(
+                margin: const EdgeInsets.only(top: kToolbarHeight),
+                padding: EdgeInsets.fromLTRB(24, 16, 24, bottomInset + 24),
+                decoration: BoxDecoration(
+                  color: ThemeColors.floatingPanelColor,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(32),
+                  ),
+                  border: Border(
+                    top: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                  ),
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: ThemeColors.captionText.withValues(
+                              alpha: 0.3,
+                            ),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      if (isLoading)
+                        const SizedBox(
+                          height: 200,
+                          child: Center(child: CircularProgressIndicator()),
+                        )
+                      else ...[
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: ThemeColors.primary.withValues(
+                                  alpha: 0.15,
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Icon(
+                                Icons.podcasts_rounded,
+                                color: ThemeColors.primary,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    "Paylaş",
+                                    style: TextStyle(
+                                      color: ThemeColors.titleText,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 22,
+                                    ),
+                                  ),
+                                  Text(
+                                    item is FolderItem
+                                        ? "Klasör Paylaşımı"
+                                        : "Dosya Paylaşımı",
+                                    style: TextStyle(
+                                      color: ThemeColors.captionText,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
+
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: ThemeColors.surface,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: ThemeColors.titleText.withValues(
+                                alpha: 0.05,
+                              ),
+                            ),
+                          ),
+                          child: Column(
+                            children: [
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.lock_rounded,
+                                        size: 20,
+                                        color: ThemeColors.titleText,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Text(
+                                        "Şifre Koruması",
+                                        style: TextStyle(
+                                          color: ThemeColors.titleText,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Switch(
+                                    value: isPasswordEnabled,
+                                    activeColor: ThemeColors.primary,
+                                    onChanged: (val) => setState(() {
+                                      isPasswordEnabled = val;
+                                      if (!val) passwordController.clear();
+                                    }),
+                                  ),
+                                ],
+                              ),
+                              if (isPasswordEnabled) ...[
+                                const SizedBox(height: 16),
+                                TextField(
+                                  controller: passwordController,
+                                  obscureText: true,
+                                  style: TextStyle(
+                                    color: ThemeColors.titleText,
+                                    letterSpacing: 2,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  decoration: InputDecoration(
+                                    hintText: "Bir şifre belirleyin",
+                                    hintStyle: const TextStyle(
+                                      letterSpacing: 0,
+                                      fontWeight: FontWeight.normal,
+                                    ),
+                                    filled: true,
+                                    fillColor: ThemeColors.background,
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: BorderSide.none,
+                                    ),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 14,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: ThemeColors.surface,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: ThemeColors.titleText.withValues(
+                                alpha: 0.05,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.timer_rounded,
+                                    size: 20,
+                                    color: ThemeColors.titleText,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Text(
+                                    "Geçerlilik",
+                                    style: TextStyle(
+                                      color: ThemeColors.titleText,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              DropdownButtonHideUnderline(
+                                child: DropdownButton<int>(
+                                  value: expireHours,
+                                  dropdownColor: ThemeColors.surface,
+                                  style: TextStyle(
+                                    color: ThemeColors.primary,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  items: const [
+                                    DropdownMenuItem(
+                                      value: 0,
+                                      child: Text("Sınırsız"),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 1,
+                                      child: Text("1 Saat"),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 24,
+                                      child: Text("1 Gün"),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 168,
+                                      child: Text("1 Hafta"),
+                                    ),
+                                  ],
+                                  onChanged: (val) =>
+                                      setState(() => expireHours = val!),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+
+                        if (currentLink != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 16,
+                            ),
+                            margin: const EdgeInsets.only(bottom: 24),
+                            decoration: BoxDecoration(
+                              color: ThemeColors.primary.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: ThemeColors.primary.withValues(
+                                  alpha: 0.3,
+                                ),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    currentLink!,
+                                    style: TextStyle(
+                                      color: ThemeColors.primary,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                GestureDetector(
+                                  onTap: () {
+                                    Clipboard.setData(
+                                      ClipboardData(text: currentLink!),
+                                    );
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text("Bağlantı kopyalandı!"),
+                                        backgroundColor: Colors.green,
+                                      ),
+                                    );
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: ThemeColors.primary,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: const Icon(
+                                      Icons.copy_rounded,
+                                      size: 16,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                        Row(
+                          children: [
+                            if (currentLink != null) ...[
+                              Expanded(
+                                flex: 1,
+                                child: OutlinedButton(
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.redAccent,
+                                    side: BorderSide(
+                                      color: Colors.redAccent.withValues(
+                                        alpha: 0.3,
+                                      ),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 16,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                  onPressed: () async {
+                                    setState(() => isLoading = true);
+                                    await viewModel.revokeShareLink(item);
+                                    if (sheetContext.mounted)
+                                      Navigator.pop(sheetContext);
+                                    if (context.mounted)
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text("Paylaşım durduruldu."),
+                                        ),
+                                      );
+                                  },
+                                  child: const Icon(Icons.block_rounded),
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                            ],
+                            Expanded(
+                              flex: 3,
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: ThemeColors.primary,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 16,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                ),
+                                onPressed: () async {
+                                  if (isPasswordEnabled &&
+                                      passwordController.text.trim().isEmpty) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          "Lütfen bir şifre girin!",
+                                        ),
+                                        backgroundColor: Colors.redAccent,
+                                      ),
+                                    );
+                                    return;
+                                  }
+                                  setState(() => isLoading = true);
+                                  final data = await viewModel
+                                      .generateShareLink(
+                                        item,
+                                        password: isPasswordEnabled
+                                            ? passwordController.text.trim()
+                                            : null,
+                                        expireHours: expireHours,
+                                      );
+                                  if (data != null) {
+                                    setState(() {
+                                      currentLink = data['share_link'];
+                                      isLoading = false;
+                                    });
+                                    if (context.mounted)
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            "Bağlantı güncellendi!",
+                                          ),
+                                          backgroundColor: Colors.green,
+                                        ),
+                                      );
+                                  } else {
+                                    setState(() => isLoading = false);
+                                  }
+                                },
+                                child: Text(
+                                  currentLink == null
+                                      ? "Bağlantı Oluştur"
+                                      : "Ayarları Kaydet",
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 }

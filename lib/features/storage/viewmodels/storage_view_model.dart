@@ -17,6 +17,9 @@ import 'package:shared_core/models/file_model.dart';
 import 'package:shared_core/services/sync_service.dart';
 import 'package:shared_core/services/local_storage_service.dart';
 
+// API BASE URL'i global veya servisten alamıyorsak diye güvenli bir tanım (Eğer başka yerde tanımlıysa burayı silebilirsin)
+const String API_BASE_URL = "https://mostromo.com/connect/";
+
 class UploadItem {
   final XFile file;
   final int targetFolderId;
@@ -73,11 +76,9 @@ class StorageViewModel extends ChangeNotifier {
   bool _isLoading = true;
   String _syncStatus = '';
 
-  // 🌟 NAVİGASYON GEÇMİŞİ (İLERİ/GERİ)
   final List<int> _navigationStack = [0];
   final List<int> _forwardStack = [];
 
-  // 🌟 EKSİK OLAN VE GERİ EKLENEN SEÇİM DEĞİŞKENLERİ
   final Set<FolderItem> _selectedFolders = {};
   final Set<FileItem> _selectedFiles = {};
 
@@ -600,7 +601,7 @@ class StorageViewModel extends ChangeNotifier {
             SyncService.uploadFileInChunks(
               file: File(item.file.path),
               folderId: finalTargetFolderId,
-              userId: userId,
+              userId: userId, // Düzeltme
               onProgress: (progress) {
                 progressMap[item.file.path] = progress;
                 updateOverallProgress();
@@ -647,7 +648,7 @@ class StorageViewModel extends ChangeNotifier {
     } catch (e) {}
 
     await fetchWorkspaces();
-    final result = await SyncService.syncFiles(userId: userId);
+    final result = await SyncService.syncFiles(userId: userId); // Düzeltme
 
     if (result.success) {
       _allFolders = result.folders;
@@ -921,7 +922,7 @@ class StorageViewModel extends ChangeNotifier {
         final newFolder = await SyncService.createFolder(
           part,
           currentParentId,
-          userId: userId,
+          userId: userId, // Düzeltme
         );
         if (newFolder != null) {
           _allFolders.add(newFolder);
@@ -1035,6 +1036,9 @@ class StorageViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  // =====================================================================
+  // 📥 KESİNTİSİZ ASENKRON İNDİRME MOTORU
+  // =====================================================================
   final List<DownloadItem> _activeDownloads = [];
   List<DownloadItem> get activeDownloads => _activeDownloads;
 
@@ -1059,6 +1063,43 @@ class StorageViewModel extends ChangeNotifier {
     final newItem = DownloadItem(
       id: file.fileUrl,
       fileName: file.fileName,
+      url: url,
+      savePath: savePath,
+    );
+
+    _activeDownloads.add(newItem);
+    notifyListeners();
+
+    _processDownload(newItem);
+  }
+
+  // 🌟 KLASÖR İNDİRME FONKSİYONU
+  Future<void> startFolderDownload(FolderItem folder) async {
+    final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getInt('user_id') ?? 0;
+    if (userId == 0) return;
+
+    // PHP ZIP motorumuzun adresi
+    String url =
+        "https://mostromo.com/connect/android/download_folder.php?folder_id=${folder.folderId}&user_id=$userId";
+
+    Directory? dir = await getDownloadsDirectory();
+    dir ??= await getApplicationDocumentsDirectory();
+
+    final mostromoDir = Directory('${dir.path}/Mostromo');
+    if (!await mostromoDir.exists()) {
+      await mostromoDir.create(recursive: true);
+    }
+
+    // Klasör ZIP olarak inecek
+    final savePath = '${mostromoDir.path}/${folder.folderName}.zip';
+
+    if (_activeDownloads.any((item) => item.id == 'folder_${folder.folderId}'))
+      return;
+
+    final newItem = DownloadItem(
+      id: 'folder_${folder.folderId}',
+      fileName: '${folder.folderName}.zip',
       url: url,
       savePath: savePath,
     );
@@ -1204,22 +1245,26 @@ class StorageViewModel extends ChangeNotifier {
   }
 
   // =====================================================================
-  // 🔗 DOSYA PAYLAŞIM SİSTEMİ (GELİŞMİŞ)
+  // 🔗 DOSYA VE KLASÖR PAYLAŞIM SİSTEMİ
   // =====================================================================
-
-  // 1. Mevcut linkin durumunu (Şifre var mı, süre ne alemde) kontrol eder
-  Future<Map<String, dynamic>?> getShareLinkInfo(FileItem file) async {
+  Future<Map<String, dynamic>?> getShareLinkInfo(dynamic item) async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getInt('user_id') ?? 0;
     if (userId == 0) return null;
+
+    final isFolder = item is FolderItem;
 
     try {
       final response = await http.post(
         Uri.parse("https://mostromo.com/connect/android/share_manager.php"),
         body: json.encode({
           'action': 'get',
-          'file_url': file.fileUrl.replaceFirst(API_BASE_URL, ''),
           'user_id': userId,
+          'item_type': isFolder ? 'folder' : 'file',
+          'file_url': isFolder
+              ? null
+              : (item as FileItem).fileUrl.replaceFirst(API_BASE_URL, ''),
+          'folder_id': isFolder ? (item as FolderItem).folderId : null,
         }),
       );
       if (response.statusCode == 200) {
@@ -1230,9 +1275,8 @@ class StorageViewModel extends ChangeNotifier {
     return null;
   }
 
-  // 2. Yeni şifre ve süreyle taze bir link oluşturur
   Future<Map<String, dynamic>?> generateShareLink(
-    FileItem file, {
+    dynamic item, {
     String? password,
     int expireHours = 0,
   }) async {
@@ -1240,13 +1284,19 @@ class StorageViewModel extends ChangeNotifier {
     final userId = prefs.getInt('user_id') ?? 0;
     if (userId == 0) return null;
 
+    final isFolder = item is FolderItem;
+
     try {
       final response = await http.post(
         Uri.parse("https://mostromo.com/connect/android/share_manager.php"),
         body: json.encode({
           'action': 'create',
-          'file_url': file.fileUrl.replaceFirst(API_BASE_URL, ''),
           'user_id': userId,
+          'item_type': isFolder ? 'folder' : 'file',
+          'file_url': isFolder
+              ? null
+              : (item as FileItem).fileUrl.replaceFirst(API_BASE_URL, ''),
+          'folder_id': isFolder ? (item as FolderItem).folderId : null,
           'password': password,
           'expire_hours': expireHours,
         }),
@@ -1259,18 +1309,23 @@ class StorageViewModel extends ChangeNotifier {
     return null;
   }
 
-  // 3. Linki tamamen imha eder
-  Future<bool> revokeShareLink(FileItem file) async {
+  Future<bool> revokeShareLink(dynamic item) async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getInt('user_id') ?? 0;
+
+    final isFolder = item is FolderItem;
 
     try {
       final response = await http.post(
         Uri.parse("https://mostromo.com/connect/android/share_manager.php"),
         body: json.encode({
           'action': 'revoke',
-          'file_url': file.fileUrl.replaceFirst(API_BASE_URL, ''),
           'user_id': userId,
+          'item_type': isFolder ? 'folder' : 'file',
+          'file_url': isFolder
+              ? null
+              : (item as FileItem).fileUrl.replaceFirst(API_BASE_URL, ''),
+          'folder_id': isFolder ? (item as FolderItem).folderId : null,
         }),
       );
       if (response.statusCode == 200) {
@@ -1278,6 +1333,27 @@ class StorageViewModel extends ChangeNotifier {
       }
     } catch (e) {}
     return false;
+  }
+
+  // 🌟 YENİ EKLENDİ: Tüm Paylaşılan Linkleri Getirme
+  Future<List<Map<String, dynamic>>> fetchSharedLinks() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getInt('user_id') ?? 0;
+    if (userId == 0) return [];
+
+    try {
+      final response = await http.post(
+        Uri.parse("https://mostromo.com/connect/android/share_manager.php"),
+        body: json.encode({'action': 'list', 'user_id': userId}),
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          return List<Map<String, dynamic>>.from(data['links'] ?? []);
+        }
+      }
+    } catch (e) {}
+    return [];
   }
 }
 

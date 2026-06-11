@@ -152,6 +152,20 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
             Icons.link_rounded,
             'Bağlantıyı Paylaş',
           ),
+
+        if (item is FolderItem)
+          _buildDesktopMenuItem(
+            'download_folder',
+            Icons.archive_rounded,
+            'ZIP Olarak İndir',
+          ),
+
+        if (item is FolderItem)
+          _buildDesktopMenuItem(
+            'share_folder',
+            Icons.podcasts_rounded,
+            'Klasörü Paylaş',
+          ),
         const PopupMenuDivider(height: 1),
         _buildDesktopMenuItem(
           'trash',
@@ -269,8 +283,11 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
     } else if (action == 'download') {
       viewModel.startDownload(item as FileItem);
     } else if (action == 'share') {
-      // 🌟 YENİ: Paylaşım Diyaloğunu Aç
-      _showShareDialog(context, item as FileItem, viewModel);
+      _showShareDialog(context, item, viewModel);
+    } else if (action == 'download_folder') {
+      viewModel.startFolderDownload(item as FolderItem);
+    } else if (action == 'share_folder') {
+      _showShareDialog(context, item, viewModel);
     }
   }
 
@@ -308,7 +325,6 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
         }
         return KeyEventResult.ignored;
       },
-      // 🌟 YENİ: UYGULAMAYI FARE YAN TUŞLARI İÇİN DİNLEYİCİYE (LISTENER) ALIYORUZ!
       child: Listener(
         onPointerDown: (PointerDownEvent event) {
           if (event.buttons == kBackMouseButton) {
@@ -950,7 +966,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
   // 🌟 YENİ: GELİŞMİŞ PREMIUM PAYLAŞIM PENCERESİ
   void _showShareDialog(
     BuildContext context,
-    FileItem file,
+    dynamic item,
     StorageViewModel viewModel,
   ) {
     bool isLoading = true;
@@ -961,14 +977,11 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
 
     // Pencere açılırken mevcut ayarları sunucudan çeker
     void fetchCurrentInfo(StateSetter setState) async {
-      final info = await viewModel.getShareLinkInfo(file);
+      final info = await viewModel.getShareLinkInfo(item);
       if (info != null) {
         currentLink = info['share_link'];
         isPasswordEnabled = info['has_password'] ?? false;
         if (isPasswordEnabled) passwordController.text = info['password'] ?? '';
-
-        // Kalan süreyi hesapla (Basitçe dropdown için tutuyoruz)
-        // Gerçek projede datetime parse edilip tam saat bulunabilir, şimdilik UI'ı koruyalım
       }
       setState(() => isLoading = false);
     }
@@ -1007,7 +1020,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                     ),
                     const SizedBox(width: 16),
                     Text(
-                      "Dosyayı Paylaş",
+                      "Paylaş",
                       style: TextStyle(
                         color: ThemeColors.titleText,
                         fontWeight: FontWeight.bold,
@@ -1023,7 +1036,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        "Bu dosyaya dışarıdan kimlerin, ne kadar süreyle erişebileceğini ayarlayın.",
+                        "Bu içeriğe dışarıdan kimlerin, ne kadar süreyle erişebileceğini ayarlayın.",
                         style: TextStyle(
                           color: ThemeColors.captionText,
                           fontSize: 14,
@@ -1230,7 +1243,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                       ),
                       onPressed: () async {
                         setState(() => isLoading = true);
-                        await viewModel.revokeShareLink(file);
+                        await viewModel.revokeShareLink(item);
                         Navigator.pop(dialogContext);
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text("Paylaşım durduruldu.")),
@@ -1274,7 +1287,7 @@ class _MyStorageWindowsPageState extends State<MyStorageWindowsPage> {
                       }
                       setState(() => isLoading = true);
                       final data = await viewModel.generateShareLink(
-                        file,
+                        item,
                         password: isPasswordEnabled
                             ? passwordController.text.trim()
                             : null,
