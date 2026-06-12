@@ -26,7 +26,6 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
 
   final TextEditingController _passwordController = TextEditingController();
 
-  // Klasör Gezintisi İçin Gerekli Değişkenler
   int? _currentFolderId;
   List<Map<String, dynamic>> _breadcrumb = [];
 
@@ -63,9 +62,10 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
             _errorMessage = '';
             _isLoading = false;
 
-            // Eğer klasörse gezinme ağacını başlat
             if (_fileData!['item_type'] == 'folder') {
-              _currentFolderId = _fileData!['root_folder_id'];
+              // 🌟 ÇÖZÜM: PHP'den gelen ID'yi kesin olarak Integer'a çeviriyoruz
+              _currentFolderId =
+                  int.tryParse(_fileData!['root_folder_id'].toString()) ?? 0;
               _breadcrumb = [
                 {
                   'id': _currentFolderId,
@@ -114,18 +114,24 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
             .toLowerCase();
     String fType = data['file_Type'] ?? 'other';
 
-    // Uygulamanın API dizininde değilse mutlak yolu oluştur
     String absoluteUrl = data['file_url'] ?? data['file_URL'];
     if (!absoluteUrl.startsWith('http'))
       absoluteUrl = 'https://mostromo.com/connect/$absoluteUrl';
 
+    // 🌟 ÇÖZÜM: Güvenli Tip Dönüşümleri
     final dummyFile = FileItem(
       fileName: data['file_Name'] ?? data['file_name'],
       fileUrl: absoluteUrl,
-      fileSize: data['file_Size'] ?? data['file_size'] ?? 0,
+      fileSize:
+          int.tryParse(
+            data['file_Size']?.toString() ??
+                data['file_size']?.toString() ??
+                '0',
+          ) ??
+          0,
       fileExtension: fileExt,
       fileType: fType,
-      folderId: data['folder_id'] ?? 0,
+      folderId: int.tryParse(data['folder_id']?.toString() ?? '0') ?? 0,
       createdAt: data['createdDate'] ?? DateTime.now().toIso8601String(),
     );
 
@@ -140,8 +146,8 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
 
   void _downloadEntireFolder() {
     final dummyFolder = FolderItem(
-      folderId: _fileData!['root_folder_id'],
-      folderName: _fileData!['root_folder_name'],
+      folderId: _currentFolderId ?? 0,
+      folderName: _breadcrumb.last['name'] ?? 'Klasör',
       parentId: 0,
     );
     context.read<StorageViewModel>().startFolderDownload(dummyFolder);
@@ -162,10 +168,10 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
       canPop: !isFolderExplorer || _breadcrumb.length <= 1,
       onPopInvoked: (didPop) {
         if (didPop) return;
-        // Android geri tuşuna basıldığında uygulamadan çıkmak yerine bir üst klasöre dön!
         setState(() {
           _breadcrumb.removeLast();
-          _currentFolderId = _breadcrumb.last['id'];
+          _currentFolderId =
+              int.tryParse(_breadcrumb.last['id'].toString()) ?? 0;
         });
       },
       child: Scaffold(
@@ -188,7 +194,8 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
               if (isFolderExplorer && _breadcrumb.length > 1) {
                 setState(() {
                   _breadcrumb.removeLast();
-                  _currentFolderId = _breadcrumb.last['id'];
+                  _currentFolderId =
+                      int.tryParse(_breadcrumb.last['id'].toString()) ?? 0;
                 });
               } else {
                 context.go('/');
@@ -222,19 +229,21 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
   }
 
   // ==========================================
-  // 📁 KLASÖR GEZGİNİ ARAYÜZÜ (Sanki kendi klasörü gibi)
+  // 📁 KLASÖR GEZGİNİ ARAYÜZÜ
   // ==========================================
   Widget _buildFolderExplorer() {
+    // 🌟 ÇÖZÜM: .toString() Eşleştirmesi ile Hayalet Hataları Engelliyoruz
+    final currentIdStr = _currentFolderId.toString();
+
     final folders = (_fileData!['folders'] as List)
-        .where((f) => f['parent_id'] == _currentFolderId)
+        .where((f) => f['parent_id'].toString() == currentIdStr)
         .toList();
     final files = (_fileData!['files'] as List)
-        .where((f) => f['folder_id'] == _currentFolderId)
+        .where((f) => f['folder_id'].toString() == currentIdStr)
         .toList();
 
     return Column(
       children: [
-        // Ekmek Kırıntısı (Breadcrumb) Yolu
         Container(
           height: 48,
           width: double.infinity,
@@ -267,7 +276,7 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
                 ),
                 onPressed: () {
                   setState(() {
-                    _currentFolderId = b['id'];
+                    _currentFolderId = int.tryParse(b['id'].toString()) ?? 0;
                     _breadcrumb = _breadcrumb.sublist(0, i + 1);
                   });
                 },
@@ -347,8 +356,8 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
         ),
         onTap: () {
           setState(() {
-            _currentFolderId = f['folder_id'];
-            _breadcrumb.add({'id': f['folder_id'], 'name': f['folder_name']});
+            _currentFolderId = int.tryParse(f['folder_id'].toString()) ?? 0;
+            _breadcrumb.add({'id': _currentFolderId, 'name': f['folder_name']});
           });
         },
       ),
@@ -405,7 +414,7 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
           overflow: TextOverflow.ellipsis,
         ),
         subtitle: Text(
-          _formatSize(f['file_Size'] ?? 0),
+          _formatSize(int.tryParse(f['file_Size']?.toString() ?? '0') ?? 0),
           style: TextStyle(color: ThemeColors.captionText, fontSize: 12),
         ),
         trailing: IconButton(
@@ -413,7 +422,6 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
           onPressed: () => _downloadSingleFile(f),
         ),
         onTap: () {
-          // Medya dosyalarını direkt uygulamada aç, diğerlerini indir
           if ([
             'jpg',
             'jpeg',
@@ -426,15 +434,13 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
             String absoluteUrl = f['file_URL'].toString().startsWith('http')
                 ? f['file_URL']
                 : 'https://mostromo.com/connect/${f['file_URL']}';
-
-            // 🌟 HATA BURADAYDI: folderId eklendi!
             final dummy = FileItem(
               fileName: f['file_Name'],
               fileUrl: absoluteUrl,
-              fileSize: f['file_Size'],
+              fileSize: int.tryParse(f['file_Size']?.toString() ?? '0') ?? 0,
               fileExtension: ext,
               fileType: f['file_Type'] ?? 'other',
-              folderId: f['folder_id'] ?? 0, // <--- EKSİK OLAN PARAMETRE
+              folderId: int.tryParse(f['folder_id']?.toString() ?? '0') ?? 0,
               createdAt: '',
             );
 
@@ -608,7 +614,7 @@ class _SharedPreviewPageState extends State<SharedPreviewPage> {
               ),
               const SizedBox(height: 8),
               Text(
-                "Boyut: ${_formatSize(_fileData!['file_size'] ?? _fileData!['file_Size'] ?? 0)}",
+                "Boyut: ${_formatSize(int.tryParse(_fileData!['file_size']?.toString() ?? _fileData!['file_Size']?.toString() ?? '0') ?? 0)}",
                 style: TextStyle(fontSize: 15, color: ThemeColors.captionText),
               ),
               const SizedBox(height: 40),

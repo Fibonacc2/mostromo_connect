@@ -9,7 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
 import 'package:app_links/app_links.dart';
-import 'package:windows_single_instance/windows_single_instance.dart'; // 🌟 YENİ PAKET
+import 'package:windows_single_instance/windows_single_instance.dart';
 
 // Ortak paketlerden gelenler
 import 'package:common_ui/data/themes.dart';
@@ -32,7 +32,6 @@ void _registerWindowsProtocol() {
   if (!Platform.isWindows) return;
   try {
     final executable = Platform.resolvedExecutable;
-    // Windows'a mostromo:// linklerinin bu exe'ye ait olduğunu öğretir
     Process.runSync('reg', [
       'add',
       'HKCU\\Software\\Classes\\mostromo',
@@ -63,7 +62,6 @@ void _registerWindowsProtocol() {
   }
 }
 
-// 🌟 DİKKAT: main() fonksiyonuna "args" parametresi eklendi
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -74,28 +72,29 @@ void main(List<String> args) async {
   // --- MASAÜSTÜ (WINDOWS) AYARLARI ---
   if (!kIsWeb && Platform.isWindows) {
     await windowManager.ensureInitialized();
-
-    // 1. Windows Kayıt Defterine Protokolü Ekle
     _registerWindowsProtocol();
 
-    // 2. Çoklu Pencereyi Engelle ve Linki Yakala
+    // 🌟 WINDOWS İKİNCİ PENCERE YAKALAYICISI (GÜNCELLENDİ)
     await WindowsSingleInstance.ensureSingleInstance(
       args,
       "mostromo_connect_instance",
       onSecondWindow: (newArgs) {
-        // Zaten uygulama açıkken, tarayıcıdan linke basılıp ikinci bir kopya açılmak istendiğinde:
         if (newArgs.isNotEmpty) {
           final link = newArgs.first;
           final uri = Uri.tryParse(link);
-          if (uri != null && uri.scheme == 'mostromo' && uri.host == 'shared') {
-            final token = uri.queryParameters['t'];
-            if (token != null) {
-              // Gelen linki mevcut uygulamanın Router'ına fırlat
+
+          // Yeni host 'connect' veya eski host 'shared' desteği
+          if (uri != null &&
+              uri.scheme == 'mostromo' &&
+              (uri.host == 'connect' || uri.host == 'shared')) {
+            // Parametre adı 'token' veya 't' olabilir
+            final token =
+                uri.queryParameters['token'] ?? uri.queryParameters['t'];
+            if (token != null && token.isNotEmpty) {
               appRouter.router.push('/shared_preview?token=$token');
             }
           }
         }
-        // Mevcut pencereyi yanıp sönerek öne getir
         windowManager.show();
         windowManager.focus();
       },
@@ -168,31 +167,30 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
       trayManager.addListener(this);
       _initSystemTray();
     }
-
-    // Uygulama içi Deep Link Dinleyicisini Başlat
     _initDeepLinks();
   }
 
   // ==========================================================
-  // 🔗 DEEP LINK (PAYLAŞIM LİNKİ) DİNLEYİCİSİ (Android / iOS / İlk Açılış)
+  // 🔗 DEEP LINK (PAYLAŞIM LİNKİ) DİNLEYİCİSİ (GÜNCELLENDİ)
   // ==========================================================
   void _initDeepLinks() {
     _appLinks = AppLinks();
 
-    // 1. Uygulama tamamen kapalıyken dışarıdan linke tıklanarak açıldıysa:
     _appLinks.getInitialLink().then((Uri? uri) {
       if (uri != null) _handleIncomingLink(uri);
     });
 
-    // 2. Uygulama zaten açıkken (Android/iOS) linke tıklandıysa:
     _linkSubscription = _appLinks.uriLinkStream.listen((uri) {
       _handleIncomingLink(uri);
     });
   }
 
   void _handleIncomingLink(Uri uri) {
-    if (uri.scheme == 'mostromo' && uri.host == 'shared') {
-      final token = uri.queryParameters['t'];
+    // 🌟 Yeni 'connect' host'u ve 'token' parametresi kontrol ediliyor
+    if (uri.scheme == 'mostromo' &&
+        (uri.host == 'connect' || uri.host == 'shared')) {
+      final token = uri.queryParameters['token'] ?? uri.queryParameters['t'];
+
       if (token != null && token.isNotEmpty) {
         debugPrint("🔗 Paylaşılan dosya linki algılandı! Token: $token");
 
