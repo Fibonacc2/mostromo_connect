@@ -41,6 +41,11 @@
               android:name="flutterEmbedding"
               android:value="2" 
               />
+
+            <meta-data 
+              android:name="flutter_deeplinking_enabled" 
+              android:value="true" 
+              />
             
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -52,18 +57,18 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
-
             <intent-filter>
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
 
-            <intent-filter>
+            <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="mostromo" android:host="shared" />
+                
+                <data android:scheme="mostromo" android:host="connect" />
             </intent-filter>
 
         </activity>

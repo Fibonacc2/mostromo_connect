@@ -1,7 +1,7 @@
 // apps/mostromo_connect/lib/core/app_router.dart
 
 import 'dart:io';
-import 'dart:ui'; // 🌟 YENİ: Menüdeki cam efekti (Blur) için eklendi
+import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -56,8 +56,20 @@ class AppRouter {
       redirect: _handleRedirect,
       routes: [
         GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
+
+        // 🌟 ASIL PAYLAŞIM ROTASI
         GoRoute(
           path: '/shared_preview',
+          builder: (context, state) {
+            final token = state.uri.queryParameters['token'] ?? '';
+            return SharedPreviewPage(token: token);
+          },
+        ),
+
+        // 🌟 WINDOWS/BAZI ANDROID SÜRÜMLERİ İÇİN YEDEK (ALIAS) ROTA
+        // (Bazen OS, host ismini de path'in içine dahil ederek gönderir)
+        GoRoute(
+          path: '/connect/shared_preview',
           builder: (context, state) {
             final token = state.uri.queryParameters['token'] ?? '';
             return SharedPreviewPage(token: token);
@@ -186,23 +198,34 @@ class AppRouter {
     GoRouterState state,
   ) async {
     final isLoggedIn = authViewModel.isLoggedIn;
-    final isGoingToLogin = state.uri.path == '/login';
+    final path = state.uri.path;
 
+    final isGoingToLogin = path == '/login';
+    // 🌟 GÜVENLİK DUVARI BYPASS'I: Ziyaretçi paylaşılan linke mi gidiyor?
+    final isGoingToSharedPreview = path.contains('shared_preview');
+
+    // Bekleme (Loading) durumunda hiçbir yönlendirme yapma
     if (authViewModel.isLoading) return null;
 
-    if (!isLoggedIn && !isGoingToLogin) {
+    // 🌟 EĞER giriş yapılmamışsa VE gidilen sayfa Login VEYA Paylaşılanlar değilse -> Login'e at.
+    if (!isLoggedIn && !isGoingToLogin && !isGoingToSharedPreview) {
       return '/login';
     }
 
+    // Giriş yapılıyken Login'e gidilirse -> Ana sayfaya at
     if (isLoggedIn && isGoingToLogin) {
       return '/';
     }
 
-    if (state.uri.path == '/upload_file') return null;
-    final hasShare = await _checkPendingShare();
-    if (hasShare && isLoggedIn) return '/upload_file';
+    if (path == '/upload_file') return null;
 
-    return null;
+    // Paylaşılan sayfaya gidilmiyorsa genel paylaşım bekliyor mu diye kontrol et
+    if (!isGoingToSharedPreview) {
+      final hasShare = await _checkPendingShare();
+      if (hasShare && isLoggedIn) return '/upload_file';
+    }
+
+    return null; // Rotaya izin ver ve yolu kesme
   }
 
   Future<bool> _checkPendingShare() async {
@@ -447,7 +470,7 @@ class _DesktopWrapper extends StatelessWidget {
 }
 
 // ============================================================================
-// 📱 MOBİL ARAYÜZ: Temizlenmiş ve Ferah Navigasyon Çubuğu
+// 📱 MOBİL ARAYÜZ
 // ============================================================================
 class _MobileWrapper extends StatefulWidget {
   final StatefulNavigationShell navigationShell;
@@ -462,8 +485,6 @@ class _MobileWrapperState extends State<_MobileWrapper> {
   bool _isVisible = true;
   double _scrollUpDistance = 0.0;
 
-  // 🌟 GÜNCELLEME: Çöp Kutusu ve Ayarlar Navbar'dan kalktığı için
-  // arka plandaki index'leri Navigasyon çubuğuna uygun hale getiren mantık
   int _getBottomBarIndex(int branchIndex) {
     if (branchIndex == 0) return 0; // Dosyalar
     if (branchIndex == 1) return 1; // Ara
@@ -472,7 +493,6 @@ class _MobileWrapperState extends State<_MobileWrapper> {
     return 0;
   }
 
-  // 🌟 YENİ EKLENTİ: Navbardan çağrılan özel ve şık Menü (Ayarlar & Çöp Kutusu için)
   void _showMobileMenu(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -494,7 +514,6 @@ class _MobileWrapperState extends State<_MobileWrapper> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Tutma Çubuğu (Drag Handle)
                 Container(
                   width: 40,
                   height: 4,
@@ -505,7 +524,6 @@ class _MobileWrapperState extends State<_MobileWrapper> {
                 ),
                 const SizedBox(height: 24),
 
-                // Geri Dönüşüm Kutusu Menüsü
                 ListTile(
                   leading: Container(
                     padding: const EdgeInsets.all(10),
@@ -537,7 +555,6 @@ class _MobileWrapperState extends State<_MobileWrapper> {
                 ),
                 const SizedBox(height: 8),
 
-                // Ayarlar Menüsü
                 ListTile(
                   leading: Container(
                     padding: const EdgeInsets.all(10),
@@ -564,9 +581,7 @@ class _MobileWrapperState extends State<_MobileWrapper> {
                   ),
                   onTap: () {
                     Navigator.pop(context);
-                    widget.navigationShell.goBranch(
-                      4,
-                    ); // Mobilde Ayarlar'ın İndeksi 4'tür
+                    widget.navigationShell.goBranch(4);
                   },
                 ),
                 const SizedBox(height: 24),
@@ -631,17 +646,15 @@ class _MobileWrapperState extends State<_MobileWrapper> {
                   widget.navigationShell.currentIndex,
                 ),
                 onDestinationSelected: (index) {
-                  // 🌟 EĞER MENÜ BUTONUNA (İndex: 3) BASILDIYSA
                   if (index == 3) {
                     _showMobileMenu(context);
                     return;
                   }
 
-                  // Diğer Sekmelerin Seçimi
                   int targetBranch = 0;
-                  if (index == 0) targetBranch = 0; // Dosyalarım
-                  if (index == 1) targetBranch = 1; // Ara
-                  if (index == 2) targetBranch = 3; // Paylaşılanlar
+                  if (index == 0) targetBranch = 0;
+                  if (index == 1) targetBranch = 1;
+                  if (index == 2) targetBranch = 3;
 
                   if (targetBranch == widget.navigationShell.currentIndex) {
                     context.read<NavEventProvider>().notifyDoubleTap(
@@ -653,7 +666,6 @@ class _MobileWrapperState extends State<_MobileWrapper> {
                     widget.navigationShell.goBranch(targetBranch);
                   }
                 },
-                // 🌟 TERTEMİZ YENİ MOBİL MENÜ LİSTESİ (SADECE 4 ÖĞE)
                 destinations: const [
                   NavigationDestination(
                     icon: Icon(Icons.folder_outlined),
