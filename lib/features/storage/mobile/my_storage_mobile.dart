@@ -1,7 +1,7 @@
 // lib/features/storage/mobile/my_storage_mobile.dart
 
-import 'dart:ui'; // 🌟 YENİ EKLENDİ (Cam efekti için)
-import 'package:flutter/services.dart'; // 🌟 YENİ EKLENDİ (Kopyalama işlemi için)
+import 'dart:ui';
+import 'package:flutter/services.dart';
 import 'package:common_ui/views/widgets/scaffold.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -14,7 +14,10 @@ import 'package:provider/provider.dart';
 
 import 'package:shared_core/models/file_model.dart';
 import 'package:shared_core/models/folder_model.dart';
-import 'package:shared_core/services/file_download_service.dart';
+
+// 🌟 YENİ: Yükleme ve İndirme bilgi panelleri mobil için içeri aktarıldı
+import '../widgets/download_status_panel.dart';
+import '../widgets/upload_status_panel.dart';
 
 class MyStorageMobilePage extends StatefulWidget {
   const MyStorageMobilePage({super.key});
@@ -34,7 +37,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<NavEventProvider>().addListener(_handleNavEvent);
-
       context.read<StorageViewModel>().setTrashMode(false);
 
       if (context.read<StorageViewModel>().allFolders.isEmpty &&
@@ -117,33 +119,57 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
                 ),
               ];
 
+        // 🌟 GÜNCELLEME: Tüm scaffold bir Stack içine alındı ki bildirim panelleri ekranın üstünde uçabilsin
         return PopScope(
           canPop: viewModel.isAtRoot,
           onPopInvoked: (didPop) {
             if (didPop) return;
             viewModel.goBack();
           },
-          child: MostromoScaffold(
-            title: titleWidget,
-            controller: _pageScrollController,
-            leading: leadingWidget,
-            actions: actionWidgets,
-            onRefresh: () => viewModel.fetchData(),
-            floatingActionButton: !isSelection
-                ? _buildUploadFab(context, viewModel.currentFolderId)
-                : null,
-            bottomBar: _buildBottomActionbar(context, viewModel),
-            body: Column(
-              children: [
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 300),
-                  child: viewModel.syncStatus.isNotEmpty
-                      ? _buildSyncStatus(viewModel.syncStatus)
-                      : const SizedBox.shrink(),
+          child: Stack(
+            children: [
+              MostromoScaffold(
+                title: titleWidget,
+                controller: _pageScrollController,
+                leading: leadingWidget,
+                actions: actionWidgets,
+                onRefresh: () => viewModel.fetchData(),
+                floatingActionButton: !isSelection
+                    ? _buildUploadFab(context, viewModel.currentFolderId)
+                    : null,
+                bottomBar: _buildBottomActionbar(context, viewModel),
+                body: Column(
+                  children: [
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 300),
+                      child: viewModel.syncStatus.isNotEmpty
+                          ? _buildSyncStatus(viewModel.syncStatus)
+                          : const SizedBox.shrink(),
+                    ),
+                    _buildContent(context, viewModel),
+                  ],
                 ),
-                _buildContent(context, viewModel),
-              ],
-            ),
+              ),
+
+              // 🌟 YENİ: MASAÜSTÜNDEKİ GİBİ CANLI İNDİRME VE YÜKLEME PANELLERİ
+              Positioned(
+                bottom: viewModel.isSelectionMode
+                    ? 90
+                    : 16, // Alt bara göre hizalama
+                left: 16,
+                right: 16,
+                child: SafeArea(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      DownloadStatusPanel(viewModel: viewModel),
+                      const SizedBox(height: 8),
+                      Center(child: UploadStatusPanel(viewModel: viewModel)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       },
@@ -407,13 +433,10 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
 
     final bool canRename =
         (viewModel.selectedFolders.length == 1) && !filesSelected;
-    final bool canShare =
-        totalSelected ==
-        1; // 🌟 YENİ: Sadece 1 öğe seçiliyken paylaşım yapılabilir
+    final bool canShare = totalSelected == 1;
 
     List<Widget> actions = [];
 
-    // 🌟 PAYLAŞ BUTONU
     if (canShare) {
       actions.add(
         _buildBottomActionItem(Icons.podcasts_rounded, 'Paylaş', () {
@@ -434,12 +457,13 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
       );
     }
 
-    if (filesSelected && !foldersSelected) {
+    // 🌟 GÜNCELLEME: Sadece Dosyalar Değil, Klasörler de İndirilebilir!
+    if (filesSelected || foldersSelected) {
       actions.add(
         _buildBottomActionItem(
           Icons.download,
           'İndir',
-          () => _downloadSelectedFiles(context, viewModel),
+          () => _downloadSelectedItems(context, viewModel),
         ),
       );
     }
@@ -526,7 +550,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
               'Aç',
               () => _openFileViewer(context, file),
             ),
-            // 🌟 YENİ PAYLAŞ MENÜSÜ EKLENDİ
             _buildActionTile(
               Icons.podcasts_rounded,
               'Paylaş',
@@ -540,7 +563,7 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
             _buildActionTile(
               Icons.download,
               'İndir',
-              () => _downloadFile(context, file),
+              () => _downloadFile(context, viewModel, file),
             ),
             _buildActionTile(
               Icons.info,
@@ -792,52 +815,45 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     await viewModel.moveToTrash();
   }
 
-  Future<void> _downloadSelectedFiles(
+  // 🌟 YENİ: Toplu Dosya ve Klasör İndirme (Windows Motoruna Bağlandı)
+  void _downloadSelectedItems(
     BuildContext context,
     StorageViewModel viewModel,
-  ) async {
-    int successCount = 0;
-    int errorCount = 0;
-    final filesToDownload = viewModel.selectedFiles.toList();
-
-    if (filesToDownload.isEmpty) {
-      viewModel.clearSelection();
-      return;
+  ) {
+    int count = 0;
+    for (var file in viewModel.selectedFiles) {
+      viewModel.startDownload(file);
+      count++;
+    }
+    for (var folder in viewModel.selectedFolders) {
+      viewModel.startFolderDownload(folder);
+      count++;
     }
 
-    for (var file in filesToDownload) {
-      final result = await FileDownloadService.requestDownload(file);
-      if (result == null) {
-        successCount++;
-      } else {
-        errorCount++;
-      }
-    }
     viewModel.clearSelection();
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            '$successCount dosya indirme sırasına eklendi.${errorCount > 0 ? ' $errorCount dosyada hata oluştu.' : ''}',
-          ),
-          backgroundColor: errorCount > 0 ? Colors.orange : Colors.green,
+          content: Text('$count öğe indirme sırasına eklendi!'),
+          backgroundColor: Colors.green,
         ),
       );
     }
   }
 
-  Future<void> _downloadFile(BuildContext context, FileItem file) async {
-    final result = await FileDownloadService.requestDownload(file);
+  // 🌟 YENİ: Tek Dosya İndirme (Windows Motoruna Bağlandı)
+  void _downloadFile(
+    BuildContext context,
+    StorageViewModel viewModel,
+    FileItem file,
+  ) {
+    viewModel.startDownload(file);
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            result == null
-                ? '"${file.fileName}" indirme işlemi başladı...'
-                : 'Hata: $result',
-          ),
-          backgroundColor: result == null ? Colors.green : Colors.red,
+          content: Text('"${file.fileName}" indirme işlemi başlatıldı...'),
+          backgroundColor: Colors.green,
         ),
       );
     }
@@ -1020,9 +1036,6 @@ class _MyStorageMobileState extends State<MyStorageMobilePage> {
     }
   }
 
-  // =====================================================================
-  // 🌟 MOBİL İÇİN ÖZEL: KAYARAK AÇILAN PAYLAŞIM PANELİ (BOTTOM SHEET)
-  // =====================================================================
   void _showMobileShareSheet(
     BuildContext context,
     dynamic item,

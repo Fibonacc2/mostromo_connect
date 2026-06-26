@@ -547,26 +547,22 @@ class StorageViewModel extends ChangeNotifier {
     notifyListeners();
 
     Map<String, double> progressMap = {};
+    final dio = Dio(); // Windows ve Web gibi güçlü Dio motoru kullanılıyor
 
     while (_pendingUploads.isNotEmpty) {
       final List<UploadItem> allItems = List.from(_pendingUploads);
 
       void updateOverallProgress() {
         double totalProgress = 0.0;
-        for (var item in allItems)
+        for (var item in allItems) {
           totalProgress += progressMap[item.file.path] ?? 0.0;
+        }
         _uploadProgress = (totalProgress / allItems.length).clamp(0.0, 1.0);
         notifyListeners();
       }
 
+      // 1. Klasörleri hallet (PHP'de oluştur)
       final folderItems = allItems.where((item) => item.isFolder).toList();
-      folderItems.sort(
-        (a, b) => a.relativePathForTree
-            .split('/')
-            .length
-            .compareTo(b.relativePathForTree.split('/').length),
-      );
-
       for (var item in folderItems) {
         await resolveOrCreateFolderTree(
           item.relativePathForTree,
@@ -577,12 +573,15 @@ class StorageViewModel extends ChangeNotifier {
         updateOverallProgress();
       }
 
+      // 2. Dosyaları Web'deki upload.php formatına (file0, fileCount, folder_id) tam uyumlu yolla
       final fileItems = allItems.where((item) => !item.isFolder).toList();
       const int maxConcurrent = 3;
 
       while (fileItems.isNotEmpty) {
         final batch = fileItems.take(maxConcurrent).toList();
-        for (var item in batch) fileItems.remove(item);
+        for (var item in batch) {
+          fileItems.remove(item);
+        }
 
         _currentlyUploadingName = batch
             .map((e) => e.file.name.split('/').last)
@@ -597,21 +596,46 @@ class StorageViewModel extends ChangeNotifier {
             item.targetFolderId,
           );
 
-          uploadTasks.add(
-            SyncService.uploadFileInChunks(
-              file: File(item.file.path),
-              folderId: finalTargetFolderId,
-              userId: userId, // Düzeltme
-              onProgress: (progress) {
-                progressMap[item.file.path] = progress;
+          uploadTasks.add(() async {
+            try {
+              FormData formData = FormData.fromMap({
+                "fileCount": 1,
+                "folder_id": finalTargetFolderId,
+                "user_id": userId,
+                "file0": await MultipartFile.fromFile(
+                  item.file.path,
+                  filename: item.file.name.split('/').last,
+                ),
+              });
+
+              final response = await dio.post(
+                "https://mostromo.com/connect/android/upload.php",
+                data: formData,
+                onSendProgress: (int sent, int total) {
+                  progressMap[item.file.path] = sent / total;
+                  updateOverallProgress();
+                },
+              );
+
+              // 🌟 YENİ: PHP'den gelen "success: true" yanıtını doğrula!
+              if (response.statusCode == 200 &&
+                  response.data != null &&
+                  response.data['success'] == true) {
+                progressMap[item.file.path] = 1.0;
+                _pendingUploads.remove(item);
                 updateOverallProgress();
-              },
-            ).then((success) {
-              progressMap[item.file.path] = 1.0;
+              } else {
+                debugPrint("❌ Sunucu dosyayı reddetti: ${response.data}");
+                // Hata durumunda dosyayı listeden çıkarmıyoruz veya hata basıyoruz.
+                _pendingUploads.remove(
+                  item,
+                ); // Sonsuz döngüye girmemesi için siliyoruz.
+              }
+            } catch (e) {
+              debugPrint("❌ Upload Hatası: $e");
               _pendingUploads.remove(item);
-              updateOverallProgress();
-            }),
-          );
+            }
+          }());
         }
         await Future.wait(uploadTasks);
       }
@@ -1042,15 +1066,28 @@ class StorageViewModel extends ChangeNotifier {
   final List<DownloadItem> _activeDownloads = [];
   List<DownloadItem> get activeDownloads => _activeDownloads;
 
+  // 📥 KESİNTİSİZ ASENKRON İNDİRME MOTORU (GÖRÜNÜR KLASÖR GÜNCELLEMESİ)
   Future<void> startDownload(FileItem file) async {
     String url = file.fileUrl;
     if (!url.startsWith('http')) {
-      url = "https://mostromo.com/connect/$url";
+      final cleanPath = url.startsWith('/') ? url.substring(1) : url;
+      url = "https://mostromo.com/connect/$cleanPath";
     }
 
-    Directory? dir = await getDownloadsDirectory();
+    // 🌟 URL Şifreleme (Dosya adındaki boşlukların bağlantı hatası vermesini engeller)
+    url = Uri.encodeFull(url);
+
+    // 🌟 ÇÖZÜM: ANDROID'İN GERÇEK (GÖRÜNÜR) İNDİRİLENLER KLASÖRÜ
+    Directory? dir;
+    if (Platform.isAndroid) {
+      // Bu yol Android'in "Dosyalarım > İndirilenler" ana dizinidir
+      dir = Directory('/storage/emulated/0/Download');
+    } else {
+      dir = await getDownloadsDirectory();
+    }
     dir ??= await getApplicationDocumentsDirectory();
 
+    // İndirilenler klasörünün içine "Mostromo" adında özel bir klasör açalım ki derli toplu dursun
     final mostromoDir = Directory('${dir.path}/Mostromo');
     if (!await mostromoDir.exists()) {
       await mostromoDir.create(recursive: true);
@@ -1073,17 +1110,23 @@ class StorageViewModel extends ChangeNotifier {
     _processDownload(newItem);
   }
 
-  // 🌟 KLASÖR İNDİRME FONKSİYONU
+  // 🌟 KLASÖR İNDİRME FONKSİYONU (GÖRÜNÜR KLASÖR GÜNCELLEMESİ)
   Future<void> startFolderDownload(FolderItem folder) async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getInt('user_id') ?? 0;
     if (userId == 0) return;
 
-    // PHP ZIP motorumuzun adresi
     String url =
         "https://mostromo.com/connect/android/download_folder.php?folder_id=${folder.folderId}&user_id=$userId";
+    url = Uri.encodeFull(url); // URL Şifreleme
 
-    Directory? dir = await getDownloadsDirectory();
+    // 🌟 ÇÖZÜM: ANDROID'İN GERÇEK (GÖRÜNÜR) İNDİRİLENLER KLASÖRÜ
+    Directory? dir;
+    if (Platform.isAndroid) {
+      dir = Directory('/storage/emulated/0/Download');
+    } else {
+      dir = await getDownloadsDirectory();
+    }
     dir ??= await getApplicationDocumentsDirectory();
 
     final mostromoDir = Directory('${dir.path}/Mostromo');
@@ -1091,7 +1134,6 @@ class StorageViewModel extends ChangeNotifier {
       await mostromoDir.create(recursive: true);
     }
 
-    // Klasör ZIP olarak inecek
     final savePath = '${mostromoDir.path}/${folder.folderName}.zip';
 
     if (_activeDownloads.any((item) => item.id == 'folder_${folder.folderId}'))

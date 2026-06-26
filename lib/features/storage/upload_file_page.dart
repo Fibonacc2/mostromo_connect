@@ -1,43 +1,31 @@
 // apps/mostromo_connect/lib/features/storage/upload_file_page.dart
 
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // MethodChannel için
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_core/services/upload_controller.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:cross_file/cross_file.dart';
 
-class UploadFilePage extends StatelessWidget {
+// 🌟 YENİ MOTOR
+import 'viewmodels/storage_view_model.dart';
+
+class UploadFilePage extends StatefulWidget {
   final int folderId;
 
   const UploadFilePage({super.key, required this.folderId});
 
   @override
-  Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      // ✅ DRIVE İÇİN ÖZEL AYARLAR (Url ve Parametreler)
-      create: (_) => UploadController(
-        uploadUrl: "https://mostromo.com/connect/android/upload.php",
-        additionalFields: {
-          "uploadLocation": "myStorage", // Drive dosyaları buraya
-          "folder_id": folderId.toString(),
-        },
-      ),
-      // Alt widget'ı Stateful yaparak initState kullanabiliyoruz
-      child: const _UploadFileView(),
-    );
-  }
+  State<UploadFilePage> createState() => _UploadFilePageState();
 }
 
-class _UploadFileView extends StatefulWidget {
-  const _UploadFileView();
-
-  @override
-  State<_UploadFileView> createState() => _UploadFileViewState();
-}
-
-class _UploadFileViewState extends State<_UploadFileView> {
-  // ✅ DRIVE İÇİN KANAL ADI
+class _UploadFilePageState extends State<UploadFilePage> {
+  // ✅ DRIVE İÇİN KANAL ADI (Aynen korundu)
   static const platform = MethodChannel('mostromo_connect/share');
+
+  // Eski Controller yerine dosyaları yerel olarak tutuyoruz
+  final List<PlatformFile> _selectedFiles = [];
 
   @override
   void initState() {
@@ -46,7 +34,7 @@ class _UploadFileViewState extends State<_UploadFileView> {
     _checkSharedFiles();
   }
 
-  // Native taraftan paylaşılan dosyaları alıp Controller'a ekler
+  // Native taraftan paylaşılan dosyaları alıp Listeye ekler
   Future<void> _checkSharedFiles() async {
     try {
       final bool? hasShare = await platform.invokeMethod('hasPendingShare');
@@ -57,9 +45,12 @@ class _UploadFileViewState extends State<_UploadFileView> {
         );
 
         if (sharedPaths != null && sharedPaths.isNotEmpty && mounted) {
-          // Controller'a eriş ve dosyaları ekle
-          final controller = context.read<UploadController>();
-          await controller.addFilesFromPaths(sharedPaths.cast<String>());
+          setState(() {
+            for (var path in sharedPaths.cast<String>()) {
+              final name = path.split('/').last;
+              _selectedFiles.add(PlatformFile(name: name, size: 0, path: path));
+            }
+          });
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -82,51 +73,104 @@ class _UploadFileViewState extends State<_UploadFileView> {
     }
   }
 
+  Future<void> _pickFiles() async {
+    final result = await FilePicker.platform.pickFiles(allowMultiple: true);
+    if (result != null) {
+      setState(() {
+        _selectedFiles.addAll(result.files);
+      });
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Dosya seçilmedi.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  void _removeFile(int index) {
+    setState(() {
+      _selectedFiles.removeAt(index);
+    });
+  }
+
+  void _clearAll() {
+    setState(() {
+      _selectedFiles.clear();
+    });
+  }
+
+  String _formatSize(int bytes) {
+    if (bytes <= 0) return "Boyut Hesaplanıyor...";
+    const units = ["B", "KB", "MB", "GB"];
+    final digitGroups = (log(bytes) / log(1024)).floor();
+    return "${(bytes / pow(1024, digitGroups)).toStringAsFixed(1)} ${units[digitGroups]}";
+  }
+
+  // 🌟 YENİ: DOSYALARI WINDOWS İLE AYNI OLAN ANA MOTORA PASLIYORUZ
+  Future<void> _startUpload() async {
+    if (_selectedFiles.isEmpty) return;
+
+    final viewModel = context.read<StorageViewModel>();
+    final folderName = viewModel.currentFolderName;
+
+    // Dosyaları yeni motora ekle
+    for (var file in _selectedFiles) {
+      if (file.path != null) {
+        viewModel.addProgrammaticUpload(
+          file: XFile(file.path!),
+          targetFolderId: widget.folderId,
+          targetFolderName: folderName,
+        );
+      }
+    }
+
+    // Yüklemeyi Global Motor üzerinden başlat
+    viewModel.startUpload();
+    await _clearNativeSharedFiles();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Yükleme başlatıldı. Arka planda devam edecek.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      // ✅ Tasarımdaki "İstersen sayfayı kapatabilirsin" yorumunu uyguladık.
+      // Kullanıcı kapandığında alttaki Global Upload paneliyle karşılaşacak.
+      context.pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Controller'ı dinle (watch)
-    final controller = context.watch<UploadController>();
-    final hasFiles = controller.selectedFiles.isNotEmpty;
+    final hasFiles = _selectedFiles.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Dosya Yükleme'),
         centerTitle: true,
         actions: [
-          // Yükleme sırasında silme butonunu devre dışı bırak
           IconButton(
             icon: const Icon(Icons.delete_forever_rounded),
-            onPressed: (hasFiles && !controller.isUploading)
-                ? () => controller.clearAll()
-                : null,
+            onPressed: hasFiles ? _clearAll : null,
           ),
         ],
       ),
 
       // Dosya Ekleme Butonu (FAB)
-      // Yükleme sırasında gizlenir
-      floatingActionButton: !controller.isUploading
-          ? AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-              margin: EdgeInsets.only(bottom: hasFiles ? 70.0 : 16.0),
-              child: FloatingActionButton.extended(
-                onPressed: () async {
-                  final picked = await controller.pickFiles();
-                  if (picked == 0 && context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Dosya seçilmedi.'),
-                        duration: Duration(seconds: 2),
-                      ),
-                    );
-                  }
-                },
-                label: const Text('Dosya Ekle'),
-                icon: const Icon(Icons.add_rounded),
-              ),
-            )
-          : null, // Yükleme yapılıyorsa FAB'ı gizle
+      floatingActionButton: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+        margin: EdgeInsets.only(bottom: hasFiles ? 70.0 : 16.0),
+        child: FloatingActionButton.extended(
+          onPressed: _pickFiles,
+          label: const Text('Dosya Ekle'),
+          icon: const Icon(Icons.add_rounded),
+        ),
+      ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
 
       body: Column(
@@ -135,10 +179,10 @@ class _UploadFileViewState extends State<_UploadFileView> {
           Expanded(
             child: hasFiles
                 ? ListView.builder(
-                    itemCount: controller.selectedFiles.length,
+                    itemCount: _selectedFiles.length,
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
                     itemBuilder: (context, index) {
-                      final file = controller.selectedFiles[index];
+                      final file = _selectedFiles[index];
                       return Card(
                         margin: const EdgeInsets.symmetric(vertical: 6),
                         child: ListTile(
@@ -147,16 +191,13 @@ class _UploadFileViewState extends State<_UploadFileView> {
                           ),
                           title: Text(file.name),
                           subtitle: Text(
-                            controller.formatFileSize(file.size),
+                            _formatSize(file.size),
                             style: const TextStyle(fontSize: 12),
                           ),
-                          trailing: !controller.isUploading
-                              ? IconButton(
-                                  icon: const Icon(Icons.close_rounded),
-                                  onPressed: () =>
-                                      controller.removeFileAt(index),
-                                )
-                              : null, // Yükleme sırasında silinemez
+                          trailing: IconButton(
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: () => _removeFile(index),
+                          ),
                         ),
                       );
                     },
@@ -181,13 +222,12 @@ class _UploadFileViewState extends State<_UploadFileView> {
                   ),
           ),
 
-          // --- ALT KISIM (BUTON veya PROGRESS) ---
+          // --- ALT KISIM (YÜKLE BUTONU) ---
           if (hasFiles)
             AnimatedContainer(
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeInOut,
-              // Yükleme sırasında alan biraz daha geniş olabilir
-              height: controller.isUploading ? 100 : 80,
+              height: 80,
               decoration: BoxDecoration(
                 color: Theme.of(context).scaffoldBackgroundColor,
                 boxShadow: [
@@ -205,54 +245,14 @@ class _UploadFileViewState extends State<_UploadFileView> {
                     horizontal: 16.0,
                     vertical: 12.0,
                   ),
-                  child: controller.isUploading
-                      ? Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            // ✅ İLERLEME ÇUBUĞU
-                            LinearProgressIndicator(
-                              value: controller.currentProgress,
-                              minHeight: 8,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              "Arka planda yükleniyor... %${(controller.currentProgress * 100).toInt()}",
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        )
-                      : ElevatedButton.icon(
-                          onPressed: () async {
-                            // Yüklemeyi başlat
-                            await controller.uploadFiles();
-
-                            // Yükleme bitince native cache'i temizle
-                            await _clearNativeSharedFiles();
-
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    'Yükleme başlatıldı. Arka planda devam edecek.',
-                                  ),
-                                  backgroundColor: Colors.green,
-                                ),
-                              );
-                              // İstersen işlem başlayınca sayfayı kapatabilirsin:
-                              // context.pop();
-                            }
-                          },
-                          icon: const Icon(Icons.cloud_upload_rounded),
-                          label: Text(
-                            'Dosyaları Yükle (${controller.selectedFiles.length})',
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            minimumSize: const Size.fromHeight(50),
-                          ),
-                        ),
+                  child: ElevatedButton.icon(
+                    onPressed: _startUpload,
+                    icon: const Icon(Icons.cloud_upload_rounded),
+                    label: Text('Dosyaları Yükle (${_selectedFiles.length})'),
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(50),
+                    ),
+                  ),
                 ),
               ),
             ),
