@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:mostromo_connect/features/storage/services/local_bridge_service.dart';
+import 'package:mostromo_connect/features/storage/windows/mostromo_title_bar.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
@@ -74,7 +75,6 @@ void main(List<String> args) async {
     await windowManager.ensureInitialized();
     _registerWindowsProtocol();
 
-    // 🌟 WINDOWS İKİNCİ PENCERE YAKALAYICISI (GÜNCELLENDİ)
     await WindowsSingleInstance.ensureSingleInstance(
       args,
       "mostromo_connect_instance",
@@ -83,11 +83,9 @@ void main(List<String> args) async {
           final link = newArgs.first;
           final uri = Uri.tryParse(link);
 
-          // Yeni host 'connect' veya eski host 'shared' desteği
           if (uri != null &&
               uri.scheme == 'mostromo' &&
               (uri.host == 'connect' || uri.host == 'shared')) {
-            // Parametre adı 'token' veya 't' olabilir
             final token =
                 uri.queryParameters['token'] ?? uri.queryParameters['t'];
             if (token != null && token.isNotEmpty) {
@@ -107,6 +105,8 @@ void main(List<String> args) async {
       backgroundColor: Colors.transparent,
       skipTaskbar: false,
       title: "Mostromo Connect",
+      titleBarStyle: TitleBarStyle
+          .hidden, // 🌟 YENİ: İşletim sisteminin varsayılan başlık çubuğunu siliyoruz!
     );
 
     windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -170,9 +170,6 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
     _initDeepLinks();
   }
 
-  // ==========================================================
-  // 🔗 DEEP LINK (PAYLAŞIM LİNKİ) DİNLEYİCİSİ (GÜNCELLENDİ)
-  // ==========================================================
   void _initDeepLinks() {
     _appLinks = AppLinks();
 
@@ -186,7 +183,6 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
   }
 
   void _handleIncomingLink(Uri uri) {
-    // 🌟 Yeni 'connect' host'u ve 'token' parametresi kontrol ediliyor
     if (uri.scheme == 'mostromo' &&
         (uri.host == 'connect' || uri.host == 'shared')) {
       final token = uri.queryParameters['token'] ?? uri.queryParameters['t'];
@@ -199,7 +195,6 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
           windowManager.focus();
         }
 
-        // Kullanıcıyı önizleme sayfasına fırlat
         widget.appRouter.router.push('/shared_preview?token=$token');
       }
     }
@@ -293,6 +288,24 @@ class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
             GlobalWidgetsLocalizations.delegate,
             GlobalCupertinoLocalizations.delegate,
           ],
+          // 🌟 YENİ: GLOBAL BAŞLIK ÇUBUĞU ENTEGRASYONU
+          builder: (context, child) {
+            if (_isDesktop) {
+              return Material(
+                type: MaterialType.transparency,
+                child: Column(
+                  children: [
+                    MostromoTitleBar(
+                      onClose: () => windowManager
+                          .close(), // Kapatma işlemini windowManager'a devret
+                    ),
+                    Expanded(child: child ?? const SizedBox.shrink()),
+                  ],
+                ),
+              );
+            }
+            return child!;
+          },
         );
       },
     );

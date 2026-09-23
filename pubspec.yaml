@@ -50,6 +50,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/app_icon.ico
+    - assets/app_icon.png
   # Sadece tek dosyayı tanımlıyoruz
   fonts:
     - family: Inter
